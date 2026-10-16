@@ -29,6 +29,23 @@ function saveConfig(cfg) {
 
 let config = loadConfig();
 
+// 安装器在 userData 下写入的临时目录标记文件（installer.nsh 生成，一次性消费）
+const TEMPDIR_FLAG = path.join(app.getPath('userData'), 'tempdir.txt');
+
+// 应用安装时选择的临时文件存放位置
+function applyInstallerTempDir() {
+  try {
+    if (fs.existsSync(TEMPDIR_FLAG)) {
+      const dir = fs.readFileSync(TEMPDIR_FLAG, 'utf-8').trim();
+      if (dir) {
+        config.tempDir = dir;
+        saveConfig(config);
+      }
+      fs.unlinkSync(TEMPDIR_FLAG);
+    }
+  } catch (e) {}
+}
+
 // 确保临时目录存在
 function ensureTempDir() {
   try {
@@ -403,6 +420,8 @@ ipcMain.on('float:focus-out', () => {
 
 // ============== App 生命周期 ==============
 app.whenReady().then(() => {
+  // 应用安装器选择的临时文件目录（首次启动生效）
+  applyInstallerTempDir();
   // 恢复开机自启设置
   if (config.autoStart) {
     app.setLoginItemSettings({ openAtLogin: true });
