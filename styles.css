@@ -1,0 +1,384 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* 绝对定位布局：主体固定锚定在窗口右下角（收起/展开位置不变），
+   气泡固定在主体上方，互不挤压；主体四周留出阴影空间 */
+body {
+  position: relative;
+}
+
+/* ===== 圆形悬浮主体（主题色 #6ee4de） ===== */
+.float-button {
+  position: absolute;
+  bottom: 24px;
+  right: 22px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6ee4de 0%, #a8f0ec 100%);
+  box-shadow: 0 4px 12px rgba(110, 228, 222, 0.45), 0 2px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  z-index: 10;
+  /* 呼吸效果：光晕明暗 + 轻微缩放（纯 CSS 动画） */
+  animation: breathe 2.6s ease-in-out infinite;
+}
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 4px 12px rgba(110, 228, 222, 0.40), 0 2px 4px rgba(0, 0, 0, 0.10);
+  }
+  50% {
+    transform: scale(1.06);
+    box-shadow: 0 0 18px rgba(110, 228, 222, 0.85), 0 4px 14px rgba(110, 228, 222, 0.5), 0 2px 6px rgba(0, 0, 0, 0.16);
+  }
+}
+.float-button:hover {
+  animation: none;
+  transform: scale(1.06);
+  box-shadow: 0 6px 24px rgba(110, 228, 222, 0.7), 0 2px 6px rgba(0, 0, 0, 0.15);
+  cursor: grab;
+}
+.float-button:active {
+  cursor: grabbing;
+  transform: scale(0.98);
+}
+
+/* 悬浮球右上角小关闭按钮：位于主体右上方外侧（不覆盖主体，hover 时显示） */
+.mini-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(110, 228, 222, 0.92);
+  color: #155e5a;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  z-index: 20;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.float-button:hover .mini-close { opacity: 1; }
+.mini-close:hover { background: #d9534f; color: #fff; }
+
+/* ===== 主体内的两只动态眼睛 ===== */
+.eyes {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  pointer-events: none;
+  z-index: 5;
+}
+.eye {
+  width: 14px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  position: relative;
+  overflow: hidden;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1.5px rgba(255, 255, 255, 0.55);
+  transition: border-radius 0.15s ease, width 0.15s ease, height 0.15s ease, transform 0.15s ease;
+}
+.pupil {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #1f6f6a;
+  transform: translate(-50%, -50%);
+  transition: transform 0.12s ease-out, width 0.15s ease, height 0.15s ease, opacity 0.15s ease, top 0.15s ease;
+}
+
+/* ===== 表情（随机 + 事件触发） ===== */
+
+/* 开心：微笑眯眼 —— 内联 SVG 弯月弧线（等宽、两端圆头），瞳孔隐藏 */
+.happy-arc {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: none;
+  pointer-events: none;
+}
+.eyes.happy .eye {
+  width: 18px;
+  height: 14px;
+  background: transparent;
+  box-shadow: none;
+  transform: translateY(-4px);
+}
+.eyes.happy .happy-arc { display: block; }
+.eyes.happy .pupil { opacity: 0; }
+
+/* 伤心：眼睛半闭 + 瞳孔放大并下垂 */
+.eyes.sad .eye { transform: scaleY(0.6); }
+.eyes.sad .pupil {
+  width: 9px;
+  height: 7px;
+  top: 58%;
+}
+
+/* 左大右小 / 左小右大（放大 115%，缩小 85%） */
+.eyes.leftbig .left-eye { transform: scale(1.15); }
+.eyes.leftbig .right-eye { transform: scale(0.85); }
+.eyes.rightbig .left-eye { transform: scale(0.85); }
+.eyes.rightbig .right-eye { transform: scale(1.15); }
+
+/* 无语：两只眼睛变成两条横线 */
+.eyes.speechless .eye {
+  width: 16px;
+  height: 4px;
+  border-radius: 3px;
+  background: #1f6f6a;
+  box-shadow: none;
+}
+.eyes.speechless .pupil { opacity: 0; }
+
+/* 睡觉：闭眼横线 + 右上角 zzz 飘出 */
+.eyes.sleep .eye {
+  width: 14px;
+  height: 4px;
+  border-radius: 3px;
+  background: #1f6f6a;
+  box-shadow: none;
+}
+.eyes.sleep .pupil { opacity: 0; }
+
+/* 生气：倒八字眉（悬于眼睛上方有间距）+ 黑圆点眼睛（无眼白），参考图二 */
+.eyes.angry .eye {
+  width: 6px;
+  height: 6px;
+  background: #241b45;
+  box-shadow: none;
+}
+.eyes.angry .pupil { display: none; }
+.eyes.angry .brow { opacity: 1; top: -8px; }
+
+/* 生气时眼睛上方的倒八字眉（默认隐藏） */
+.brow {
+  position: absolute;
+  width: 18px;
+  height: 4px;
+  border-radius: 3px;
+  background: #241b45;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 6;
+}
+/* 左眉：眉梢（左端）高、眉心（右端）低 → 顺时针斜 */
+.left-brow { top: -10px; left: -10px; transform: rotate(25deg); }
+/* 右眉：眉梢（右端）高、眉心（左端）低 → 逆时针斜 */
+.right-brow { top: -10px; right: -10px; transform: rotate(-25deg); }
+
+/* 眨眼：两只眼一起闭眼 */
+.eyes.blinking .eye { animation: blinkAnim 0.32s ease-in-out; }
+/* 单眼 wink */
+.eye.winking { animation: blinkAnim 0.36s ease-in-out; }
+/* 变大变小：眼球整体缩放 */
+.eyes.bigsmall .eye { animation: bigAnim 0.75s ease-in-out; }
+
+@keyframes blinkAnim {
+  0%, 100% { transform: scaleY(1); }
+  50%      { transform: scaleY(0.08); }
+}
+@keyframes bigAnim {
+  0%, 100% { transform: scale(1); }
+  40%      { transform: scale(1.15); }
+  70%      { transform: scale(0.85); }
+}
+
+/* ===== 睡觉标记：zzz 飘出动画 ===== */
+.sleep-mark {
+  position: absolute;
+  top: -8px;
+  right: -2px;
+  width: 34px;
+  height: 34px;
+  pointer-events: none;
+  z-index: 6;
+}
+.sleep-mark span {
+  position: absolute;
+  font-weight: 800;
+  font-family: Georgia, "Times New Roman", serif;
+  color: #1f6f6a;
+  opacity: 0;
+}
+.z1 { font-size: 11px;  right: 0;  top: 18px; }
+.z2 { font-size: 13px; right: 6px; top: 8px; }
+.z3 { font-size: 15px; right: 12px; top: -2px; }
+.sleep-mark.visible span { animation: zzzFloat 1.8s ease-out infinite; }
+.sleep-mark.visible .z2 { animation-delay: 0.45s; }
+.sleep-mark.visible .z3 { animation-delay: 0.9s; }
+@keyframes zzzFloat {
+  0%   { opacity: 0; transform: translate(0, 0) scale(0.5); }
+  25%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(10px, -30px) scale(1.4); }
+}
+
+/* ===== 生气标记：四向箭头符号（连续点击三下显示，缩放呼吸动画） ===== */
+.angry-mark {
+  position: absolute;
+  top: -14px;
+  right: -14px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  z-index: 6;
+  pointer-events: none;
+}
+.angry-mark svg { transform-origin: 50% 50%; }
+.angry-mark.visible { opacity: 1; }
+.angry-mark.visible svg { animation: angryBreathe 1s ease-in-out infinite; }
+@keyframes angryBreathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.25); }
+}
+
+/* ===== 输入气泡（对话冒泡，小号，在主体上方弹出） ===== */
+.bubble {
+  position: absolute;
+  /* 固定在主体正上方：主体 bottom 24 + 主体高 64 + 间隔 12 */
+  bottom: 100px;
+  right: 22px;
+  width: 224px;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.16), 0 1px 4px rgba(0, 0, 0, 0.08);
+  padding: 10px 12px;
+  z-index: 5;
+  animation: popIn 0.18s ease-out;
+}
+/* 气泡底部小箭头，指向下方主体中心（主体与气泡右对齐，箭头偏右） */
+.bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -6px;
+  right: 32px;
+  width: 12px;
+  height: 12px;
+  background: #ffffff;
+  transform: rotate(45deg);
+  border-radius: 2px;
+}
+.bubble.hidden { display: none; }
+@keyframes popIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 气泡头部：标题 + 关闭按钮 */
+.bubble-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.bubble-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #555;
+}
+.bubble-close {
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: #aaa;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bubble-close:hover { background: #e6f7f6; color: #d9534f; }
+
+.url-input {
+  width: 100%;
+  height: 28px;
+  border: 1.5px solid #c9ecea;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+  background: #fafafa;
+}
+.url-input:focus {
+  border-color: #6ee4de;
+  background: #fff;
+}
+
+/* ===== 进度条 ===== */
+.progress-wrap { margin-top: 8px; }
+.progress-wrap.hidden { display: none; }
+
+.progress-bar {
+  width: 100%;
+  height: 5px;
+  background: #e3f6f5;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #6ee4de, #a8f0ec);
+  border-radius: 3px;
+  transition: width 0.15s ease;
+}
+.progress-text {
+  font-size: 10px;
+  color: #888;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-text {
+  font-size: 11px;
+  margin-top: 6px;
+  color: #666;
+  min-height: 14px;
+}
+.status-text.ok { color: #3a9d5d; }
+.status-text.err { color: #d9534f; }
+
+/* ===== 消息提示气泡（清理完成、复制成功等，对话冒泡样式） =====
+   注意：不能设置 overflow:hidden，否则会把指向主体的箭头裁掉 */
+.msg-bubble {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #333;
+  padding: 8px 14px;
+  text-align: center;
+  white-space: nowrap;
+}

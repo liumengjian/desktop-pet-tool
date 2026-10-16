@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      padding: 24px;
+      background: #f7f6fa;
+      color: #333;
+    }
+    h2 { font-size: 16px; margin-bottom: 20px; color: #6ee4de; }
+    .field { margin-bottom: 18px; }
+    label { display: block; font-size: 12px; color: #888; margin-bottom: 6px; }
+    .path-row { display: flex; gap: 8px; }
+    .path-row input {
+      flex: 1;
+      height: 34px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 0 10px;
+      font-size: 12px;
+      background: #fff;
+      outline: none;
+    }
+    .path-row button {
+      height: 34px;
+      padding: 0 14px;
+      border: none;
+      border-radius: 6px;
+      background: #6ee4de;
+      color: #155e5a;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .path-row button:hover { background: #4fc6bf; }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 6px;
+      font-size: 13px;
+    }
+    .radio-row {
+      display: flex;
+      gap: 18px;
+      margin-top: 6px;
+      font-size: 13px;
+    }
+    .radio-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .radio-item input { cursor: pointer; }
+    .tip { font-size: 11px; color: #aaa; margin-top: 4px; }
+    .footer {
+      margin-top: 28px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+    .footer button {
+      height: 34px;
+      padding: 0 18px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .btn-primary { background: #6ee4de; color: #155e5a; }
+    .btn-primary:hover { background: #4fc6bf; }
+    .btn-text { background: transparent; color: #888; }
+  </style>
+</head>
+<body>
+  <h2>设置</h2>
+
+  <div class="field">
+    <label>临时文件存放路径</label>
+    <div class="path-row">
+      <input type="text" id="tempDir" readonly>
+      <button id="browseBtn">浏览…</button>
+    </div>
+    <div class="tip">下载的文件会先保存到这里，复制到剪贴板后可随时清理。</div>
+  </div>
+
+  <div class="field">
+    <div class="checkbox-row">
+      <input type="checkbox" id="alwaysOnTop">
+      <label for="alwaysOnTop" style="margin:0;">窗口始终置顶</label>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>点击悬浮球右上角关闭按钮时</label>
+    <div class="radio-row">
+      <label class="radio-item">
+        <input type="radio" name="closeAction" value="quit" id="closeQuit"> 直接退出
+      </label>
+      <label class="radio-item">
+        <input type="radio" name="closeAction" value="tray" id="closeTray"> 最小化到系统托盘
+      </label>
+    </div>
+    <div class="tip">最小化到托盘后，可从系统托盘图标点击恢复悬浮窗。</div>
+  </div>
+
+  <div class="footer">
+    <button class="btn-text" id="closeBtn">关闭</button>
+    <button class="btn-primary" id="saveBtn">保存</button>
+  </div>
+
+  <script>
+    const tempDirInput = document.getElementById('tempDir');
+    const browseBtn = document.getElementById('browseBtn');
+    const alwaysOnTop = document.getElementById('alwaysOnTop');
+    const closeQuit = document.getElementById('closeQuit');
+    const closeTray = document.getElementById('closeTray');
+    const saveBtn = document.getElementById('saveBtn');
+    const closeBtn = document.getElementById('closeBtn');
+
+    // 加载当前配置
+    window.api.getConfig().then(cfg => {
+      tempDirInput.value = cfg.tempDir;
+      alwaysOnTop.checked = cfg.alwaysOnTop;
+      if (cfg.closeToTray) closeTray.checked = true; else closeQuit.checked = true;
+    });
+
+    browseBtn.addEventListener('click', async () => {
+      const dir = await window.api.pickTempDir();
+      if (dir) tempDirInput.value = dir;
+    });
+
+    saveBtn.addEventListener('click', async () => {
+      await window.api.setConfig({
+        tempDir: tempDirInput.value,
+        alwaysOnTop: alwaysOnTop.checked,
+        closeToTray: closeTray.checked
+      });
+      window.close();
+    });
+
+    closeBtn.addEventListener('click', () => window.close());
+  </script>
+</body>
+</html>
