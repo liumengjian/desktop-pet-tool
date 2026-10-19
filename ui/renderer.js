@@ -1,3 +1,21 @@
+// ===== Tauri 桥接层（替代 Electron preload，接口保持 window.api.* 不变） =====
+window.api = {
+  startDownload: (url) => window.__TAURI__.core.invoke('download_start', { url }),
+  onProgress: (cb) => window.__TAURI__.event.listen('download-progress', (e) => cb(e.payload)),
+  getConfig: () => window.__TAURI__.core.invoke('config_get'),
+  setConfig: (cfg) => window.__TAURI__.core.invoke('config_set', { newCfg: cfg }),
+  pickTempDir: () => window.__TAURI__.core.invoke('config_pick_temp_dir'),
+  openContextMenu: () => window.__TAURI__.core.invoke('open_context_menu'),
+  onActivateInput: (cb) => window.__TAURI__.event.listen('float-activate-input', () => cb()),
+  onToast: (cb) => window.__TAURI__.event.listen('float-toast', (e) => cb(e.payload)),
+  notifyBlur: () => window.__TAURI__.core.invoke('notify_blur'),
+  resizeWindow: (w, h) => window.__TAURI__.core.invoke('window_resize', { w, h }),
+  startDrag: () => window.__TAURI__.core.invoke('drag_start'),
+  stopDrag: () => window.__TAURI__.core.invoke('drag_end'),
+  requestClose: () => window.__TAURI__.core.invoke('request_close'),
+  onGlobalMouse: (cb) => window.__TAURI__.event.listen('mouse-global', (e) => cb(e.payload))
+};
+
 const btn = document.getElementById('floatButton');
 const miniClose = document.getElementById('miniClose');
 const bubble = document.getElementById('bubble');

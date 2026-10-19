@@ -1,49 +1,14 @@
 {
   "name": "file-paste-float",
   "version": "1.0.0",
-  "description": "悬浮窗工具：粘贴文件链接即下载并复制到剪贴板，微信/钉钉直接粘贴",
-  "main": "main.js",
+  "private": true,
+  "description": "FilePaste 悬浮文件粘贴（Tauri）",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:win": "tauri build --bundles nsis"
   },
-  "author": "",
-  "license": "MIT",
   "devDependencies": {
-    "electron": "^31.0.0",
-    "electron-builder": "^24.13.3"
-  },
-  "build": {
-    "appId": "com.filepaste.float",
-    "productName": "FilePaste",
-    "directories": {
-      "output": "dist"
-    },
-    "win": {
-      "target": "nsis",
-      "icon": "icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "installerIcon": "icon.ico",
-      "uninstallerIcon": "icon.ico",
-      "installerHeaderIcon": "icon.ico",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "include": "build/installer.nsh"
-    },
-    "mac": {
-      "target": "dmg",
-      "icon": "icon.icns"
-    },
-    "linux": {
-      "target": "AppImage",
-      "icon": "icon.png"
-    }
+    "@tauri-apps/cli": "^2.12.3"
   }
 }

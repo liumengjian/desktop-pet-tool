@@ -56,8 +56,13 @@
     }
     .radio-item input { cursor: pointer; }
     .tip { font-size: 11px; color: #aaa; margin-top: 4px; }
+    .tips {
+      font-size: 12px;
+      color: #85cdcf;
+      margin-top: 30px;
+    }
     .footer {
-      margin-top: 28px;
+      margin-top: 4px;
       display: flex;
       justify-content: flex-end;
       gap: 10px;
@@ -76,13 +81,11 @@
   </style>
 </head>
 <body>
-  <h2>设置</h2>
-
   <div class="field">
     <label>临时文件存放路径</label>
     <div class="path-row">
       <input type="text" id="tempDir" readonly>
-      <button id="browseBtn">浏览…</button>
+      <button id="browseBtn">浏览</button>
     </div>
     <div class="tip">下载的文件会先保存到这里，复制到剪贴板后可随时清理。</div>
   </div>
@@ -107,12 +110,23 @@
     <div class="tip">最小化到托盘后，可从系统托盘图标点击恢复悬浮窗。</div>
   </div>
 
+  <div class="tips">
+    如遇到问题，请联系：18725926908（电话、微信）、liumengjianguge@gmail.com（邮箱）
+  </div>
+
   <div class="footer">
     <button class="btn-text" id="closeBtn">关闭</button>
     <button class="btn-primary" id="saveBtn">保存</button>
   </div>
 
   <script>
+    // Tauri 桥接层（接口保持 window.api.* 不变）
+    window.api = {
+      getConfig: () => window.__TAURI__.core.invoke('config_get'),
+      setConfig: (cfg) => window.__TAURI__.core.invoke('config_set', { newCfg: cfg }),
+      pickTempDir: () => window.__TAURI__.core.invoke('config_pick_temp_dir')
+    };
+
     const tempDirInput = document.getElementById('tempDir');
     const browseBtn = document.getElementById('browseBtn');
     const alwaysOnTop = document.getElementById('alwaysOnTop');
