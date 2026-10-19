@@ -124,7 +124,8 @@
     window.api = {
       getConfig: () => window.__TAURI__.core.invoke('config_get'),
       setConfig: (cfg) => window.__TAURI__.core.invoke('config_set', { newCfg: cfg }),
-      pickTempDir: () => window.__TAURI__.core.invoke('config_pick_temp_dir')
+      pickTempDir: () => window.__TAURI__.core.invoke('config_pick_temp_dir'),
+      closeSettings: () => window.__TAURI__.core.invoke('close_settings')
     };
 
     const tempDirInput = document.getElementById('tempDir');
@@ -153,10 +154,10 @@
         alwaysOnTop: alwaysOnTop.checked,
         closeToTray: closeTray.checked
       });
-      window.close();
+      window.api.closeSettings();
     });
 
-    closeBtn.addEventListener('click', () => window.close());
+    closeBtn.addEventListener('click', () => window.api.closeSettings());
   </script>
 </body>
 </html>

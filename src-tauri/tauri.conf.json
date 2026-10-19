@@ -19,6 +19,7 @@
         "minimizable": false,
         "transparent": true,
         "decorations": false,
+        "noRedirectionBitmap": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "shadow": false,

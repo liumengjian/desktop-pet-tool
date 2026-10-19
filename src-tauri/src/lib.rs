@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder};
-use tauri::tray::{TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
@@ -150,8 +150,13 @@ fn monitor_from_point() -> (i32, i32, i32, i32) {
 
 fn primary_work_area() -> (i32, i32) {
     unsafe {
-        let sw = GetSystemMetrics(SYSTEM_METRICS_INDEX(48)); // SM_CXWORKAREA
-        let sh = GetSystemMetrics(SYSTEM_METRICS_INDEX(49)); // SM_CYWORKAREA
+        let sw = GetSystemMetrics(SYSTEM_METRICS_INDEX(0)); // SM_CXSCREEN
+        let sh = GetSystemMetrics(SYSTEM_METRICS_INDEX(1)); // SM_CYSCREEN
+        if sw > 100 && sh > 100 {
+            return (sw, sh);
+        }
+        let sw = GetSystemMetrics(SYSTEM_METRICS_INDEX(78)); // SM_CXVIRTUALSCREEN
+        let sh = GetSystemMetrics(SYSTEM_METRICS_INDEX(79)); // SM_CYVIRTUALSCREEN
         (sw, sh)
     }
 }
@@ -255,9 +260,12 @@ fn request_close(app: AppHandle, state: State<AppState>) {
 }
 
 #[tauri::command]
-fn open_context_menu(window: tauri::WebviewWindow, state: State<AppState>) {
-    if let Some(menu) = state.menu.lock().unwrap().as_ref() {
-        let _ = window.popup_menu(menu);
+fn open_context_menu(window: tauri::WebviewWindow) {
+    // 不要复用托盘菜单实例：Windows 上一个原生菜单只能属于一个宿主，
+    // 托盘菜单与窗口弹出菜单共用同一个 Menu 会导致托盘右键菜单异常。
+    let app = window.app_handle();
+    if let Ok(menu) = build_menu(app) {
+        let _ = window.popup_menu(&menu);
     }
 }
 
@@ -265,8 +273,11 @@ fn open_context_menu(window: tauri::WebviewWindow, state: State<AppState>) {
 fn notify_blur() {}
 
 // ============== 设置窗口 ==============
+// 在 Windows 上，从同步命令中调用 WebviewWindowBuilder::build() 会死锁
+// （WebView2 控制器创建是异步的，需要主线程消息泵，而同步命令阻塞了主线程），
+// 表现为窗口空白、应用卡死或闪退。因此必须使用 async 命令 + run_on_main_thread。
 #[tauri::command]
-fn open_settings_command(app: AppHandle) {
+async fn open_settings_command(app: AppHandle) {
     if let Some(w) = app.get_webview_window("settings") {
         let _ = w.show();
         let _ = w.set_focus();
@@ -275,18 +286,39 @@ fn open_settings_command(app: AppHandle) {
     let (sx, sy, sw, sh) = monitor_from_point();
     let x = sx + ((sw as f64 - SETTINGS_W) / 2.0) as i32;
     let y = sy + ((sh as f64 - SETTINGS_H) / 2.0) as i32;
-    let win = tauri::WebviewWindowBuilder::new(
-        &app,
-        "settings",
-        tauri::WebviewUrl::App("settings.html".into()),
-    )
-    .title("设置")
-    .inner_size(SETTINGS_W, SETTINGS_H)
-    .resizable(false)
-    .position(x as f64, y as f64)
-    .build()
-    .expect("创建设置窗口失败");
-    let _ = win.set_focus();
+    let app_thread = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        match tauri::WebviewWindowBuilder::new(
+            &app_thread,
+            "settings",
+            tauri::WebviewUrl::App("settings.html".into()),
+        )
+        .title("设置")
+        .inner_size(SETTINGS_W, SETTINGS_H)
+        .resizable(false)
+        .position(x as f64, y as f64)
+        .visible(true)
+        .focused(true)
+        .build()
+        {
+            Ok(win) => {
+                let _ = win.set_focus();
+            }
+            Err(e) => {
+                // 不要 panic（release 配置了 panic=abort，panic 会导致整个应用闪退）
+                eprintln!("创建设置窗口失败: {e}");
+            }
+        }
+    });
+}
+
+// 关闭设置窗口。WebView2 下原生 window.close() 对非脚本创建的窗口无效，
+// 必须由后端关闭，否则点“保存/关闭”后窗口不会消失。
+#[tauri::command]
+fn close_settings(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.close();
+    }
 }
 
 // ============== 菜单 ==============
@@ -310,7 +342,12 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         "paste" => {
             let _ = app.emit_to("main", "float-activate-input", ());
         }
-        "settings" => open_settings_command(app.clone()),
+        "settings" => {
+            let app_owned = app.to_owned();
+            let _ = tauri::async_runtime::spawn(async move {
+                open_settings_command(app_owned).await;
+            });
+        }
         "open" => {
             let cfg = app.state::<AppState>().config.lock().unwrap().clone();
             let _ = ensure_temp_dir(&cfg);
@@ -522,7 +559,15 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { .. } = event {
+                    // 只在左键抬起时恢复主窗口。右键由 tray-icon 默认逻辑弹出菜单，
+                    // 此处若对右键也 show/set_focus 主窗口会抢走前台，导致刚弹出的
+                    // 右键菜单因失焦被立即关闭。
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
                         if let Some(w) = tray.app_handle().get_webview_window("main") {
                             let _ = w.show();
                             let _ = w.set_focus();
@@ -541,7 +586,9 @@ pub fn run() {
             let (sw, sh) = primary_work_area();
             let _ = main.set_position(tauri::PhysicalPosition::new(sw - 160, sh - 220));
             let _ = main.show();
-            main.on_menu_event(|window, event| handle_menu_event(window.app_handle(), event));
+            // 注册在 App 级别：既能收到托盘菜单事件，也能收到窗口弹出菜单事件
+            // （窗口级 on_menu_event 只处理该窗口自身的菜单，收不到托盘菜单的点击）。
+            app.on_menu_event(|app_handle, event| handle_menu_event(app_handle, event));
 
             start_global_tracking(app.handle().clone());
             Ok(())
@@ -557,7 +604,8 @@ pub fn run() {
             request_close,
             open_context_menu,
             notify_blur,
-            open_settings_command
+            open_settings_command,
+            close_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
