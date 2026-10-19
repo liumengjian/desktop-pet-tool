@@ -104,10 +104,9 @@ function isInteractive(el) {
 document.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   if (isInteractive(e.target)) return;
-  // 按下主体即唤醒睡觉（点击、拖动都算接触）
+  // 按下主体即唤醒睡觉（点击、拖动都算接触）：先进入“困”过渡
   if (sleeping && e.target.closest('#floatButton')) {
-    sleeping = false;
-    clearMood();
+    wakeUp();
   }
   downPos = { x: e.screenX, y: e.screenY };
   dragArmed = true;
@@ -121,8 +120,8 @@ document.addEventListener('mouseup', (e) => {
   window.api.stopDrag();
   // 未移动视为点击：点击主体切换展开/收起
   if (moved < DRAG_CLICK_THRESHOLD && e.target.closest('#floatButton')) {
-    // 点击唤醒：退出持续睡觉状态
-    if (sleeping) { sleeping = false; clearMood(); }
+    // 点击唤醒：先进入“困”过渡（mousedown 已处理，这里兜底）
+    wakeUp();
     // 连续点击计数：快速点击三下触发生气表情
     clickCount++;
     clearTimeout(clickTimer);
@@ -216,14 +215,18 @@ let moodTimer = null;
 let moodActive = false;
 // 睡觉持续状态：2 分钟无点击触发，点击主体唤醒
 let sleeping = false;
+// 唤醒过渡：刚醒来先进入“困”状态，结束后再回到随机表情
+let waking = false;
 let idleTimer = null;
-const IDLE_SLEEP_MS = 120000; // 2 分钟无点击触发睡觉
-// 各表情展示时长
+let drowsyTimer = null;
+const IDLE_DROWSY_MS = 110000; // 1 分 50 秒：先犯困（持续 10 秒）
+const IDLE_SLEEP_MS = 120000; // 2 分钟：进入睡眠
+// 各表情展示时长（犯困默认 5 秒，空闲犯困由调用方显式传 10 秒覆盖）
 const MOOD_DURATION = {
   happy: 2000, sad: 2000, leftbig: 1600, rightbig: 1600,
-  speechless: 1700, sleep: 2800, angry: 3000
+  speechless: 1700, sleepy: 5000, sleep: 2800, angry: 3000
 };
-const MOOD_CLASSES = ['happy', 'sad', 'leftbig', 'rightbig', 'speechless', 'sleep', 'angry'];
+const MOOD_CLASSES = ['happy', 'sad', 'leftbig', 'rightbig', 'speechless', 'sleepy', 'sleep', 'angry'];
 
 function clearMood() {
   eyes.classList.remove(...MOOD_CLASSES);
@@ -233,7 +236,7 @@ function clearMood() {
   clearTimeout(moodTimer);
 }
 
-function showMood(type, persistent = false) {
+function showMood(type, persistent = false, duration) {
   clearMood();
   if (MOOD_CLASSES.includes(type)) {
     eyes.classList.add(type);
@@ -242,17 +245,39 @@ function showMood(type, persistent = false) {
   }
   moodActive = true;
   if (persistent) return; // 持续表情（睡觉）不自动退出，等待点击唤醒
-  moodTimer = setTimeout(clearMood, MOOD_DURATION[type] || 2000);
+  moodTimer = setTimeout(clearMood, duration || MOOD_DURATION[type] || 2000);
+}
+
+// 空闲犯困：1 分 50 秒先播放“困”10 秒，120 秒由 enterSleep 覆盖进入睡眠
+function enterDrowsy() {
+  if (sleeping) return;
+  showMood('sleepy', false, 10000);
+  // 收尾加守卫：若期间已进入睡眠，则不清场，避免把睡眠表情清掉
+  clearTimeout(moodTimer);
+  moodTimer = setTimeout(() => { if (!sleeping) clearMood(); }, 10000);
 }
 
 // 空闲睡觉：超过 2 分钟没有点击主体 → 进入持续睡觉状态
 function enterSleep() {
   sleeping = true;
+  waking = false;
   showMood('sleep', true);
+}
+
+// 睡眠被唤醒：先进入“困”5 秒，结束后随机表情自然恢复
+function wakeUp() {
+  if (!sleeping && !waking) return;
+  sleeping = false;
+  waking = true;
+  clearMood();
+  showMood('sleepy', false, MOOD_DURATION.sleepy);
+  setTimeout(() => { waking = false; }, MOOD_DURATION.sleepy);
 }
 
 function resetIdleTimer() {
   clearTimeout(idleTimer);
+  clearTimeout(drowsyTimer);
+  drowsyTimer = setTimeout(enterDrowsy, IDLE_DROWSY_MS);
   idleTimer = setTimeout(enterSleep, IDLE_SLEEP_MS);
 }
 

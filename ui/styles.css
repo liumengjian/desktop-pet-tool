@@ -166,6 +166,21 @@ body {
 }
 .eyes.sleep .pupil { opacity: 0; }
 
+/* 困：眼皮半耷拉 + 缓慢犯困眨动，瞳孔下沉（区别于入睡的全闭 + zzz） */
+.eyes.sleepy .eye {
+  animation: sleepyBlink 2.4s ease-in-out infinite;
+}
+.eyes.sleepy .pupil {
+  top: 64%;
+  width: 7px;
+  height: 7px;
+  opacity: 0.9;
+}
+@keyframes sleepyBlink {
+  0%, 55%, 100% { transform: scaleY(0.6); }
+  78% { transform: scaleY(0.15); }
+}
+
 /* 生气：倒八字眉（悬于眼睛上方有间距）+ 黑圆点眼睛（无眼白），参考图二 */
 .eyes.angry .eye {
   width: 6px;
