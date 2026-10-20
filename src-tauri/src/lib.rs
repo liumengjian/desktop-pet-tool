@@ -44,8 +44,10 @@ impl Default for Config {
                 .to_string_lossy()
                 .into_owned(),
             always_on_top: true,
-            auto_start: false,
-            close_to_tray: false,
+            // 全新安装默认开启开机自启；setup 中会据此调用 autolaunch().enable() 注册启动项
+            auto_start: true,
+            // 点击悬浮球右上角关闭按钮时，默认最小化到系统托盘（而非直接退出）
+            close_to_tray: true,
         }
     }
 }
