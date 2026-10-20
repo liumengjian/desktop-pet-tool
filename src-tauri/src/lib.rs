@@ -502,7 +502,7 @@ async fn download_start(
     ensure_temp_dir(&cfg).map_err(|e| format!("无法创建临时目录: {}", e))?;
 
     let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 FilePaste/1.0")
+        .user_agent("Mozilla/5.0 desktop-pet-tool/1.0")
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| format!("初始化下载失败: {}", e))?;
@@ -589,7 +589,7 @@ pub fn run() {
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")).ok();
             let tray = TrayIconBuilder::new()
                 .icon(tray_icon.unwrap())
-                .tooltip("FilePaste 悬浮文件粘贴")
+                .tooltip("desktop-pet-tool")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {

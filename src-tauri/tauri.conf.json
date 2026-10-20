@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "FilePaste",
+  "productName": "desktop-pet-tool",
   "version": "1.0.0",
-  "identifier": "com.filepaste.float",
+  "identifier": "com.desktop-pet-tool.float",
   "build": {
     "frontendDist": "../ui"
   },
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "FilePaste",
+        "title": "desktop-pet-tool",
         "width": 112,
         "height": 112,
         "resizable": false,

@@ -1,7 +1,7 @@
 [package]
 name = "file-paste-float"
 version = "1.0.0"
-description = "FilePaste 悬浮文件粘贴"
+description = "desktop-pet-tool"
 edition = "2021"
 rust-version = "1.77"
 

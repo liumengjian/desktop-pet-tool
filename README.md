@@ -1,8 +1,10 @@
-# FilePaste — 悬浮文件粘贴工具
+# desktop-pet-tool
 
-一个 **Tauri** 桌面悬浮球：粘贴在线文件链接，自动下载并复制到剪贴板，在微信/钉钉/企业微信等桌面应用里直接 Ctrl+V 就能把文件发出去。安装包仅 **2MB**（基于系统 WebView2，无内置浏览器内核）。
+一个 **Tauri** 桌面悬浮球宠物。安装包仅 **2MB**（基于系统 WebView2，无内置浏览器内核）。
+目前功能：
+粘贴在线文件链接，自动下载并复制到剪贴板，在微信/钉钉/企业微信等桌面应用里直接 Ctrl+V 就能把文件发出去
 
-## 功能
+## 描述
 
 - **米白圆形悬浮球**：桌面任意位置自由拖动，始终置顶，表情由 emotion-ball 引擎实时渲染（SVG + 原生 JS，零依赖）
 - **左键点击**：弹出对话气泡输入框，粘贴文件 URL 后回车即下载；再次点击可收起
@@ -41,7 +43,7 @@ npm run build        # 等价：tauri build
 yarn build:win       # 等价：tauri build --bundles nsis
 ```
 
-产物位置：`src-tauri\target\release\bundle\nsis\FilePaste_1.0.0_x64-setup.exe`（约 2MB，NSIS 向导式安装，可选安装目录）
+产物位置：`src-tauri\target\release\bundle\nsis\desktop-pet-tool_1.0.0_x64-setup.exe`（约 2MB，NSIS 向导式安装，可选安装目录）
 
 > 若终端提示找不到 `cargo`，重新打开终端，或先执行：
 > ```powershell
@@ -76,4 +78,4 @@ yarn build:win       # 等价：tauri build --bundles nsis
 
 ## 配置文件位置
 
-`%APPDATA%\com.filepaste.float\config.json`，记录临时目录路径、置顶、自启、关闭行为等设置。
+`%APPDATA%\com.desktop-pet-tool.float\config.json`，记录临时目录路径、置顶、自启、关闭行为等设置。

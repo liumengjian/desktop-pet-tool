@@ -2,7 +2,7 @@
   "name": "file-paste-float",
   "version": "1.0.0",
   "private": true,
-  "description": "FilePaste 悬浮文件粘贴（Tauri）",
+  "description": "desktop-pet-tool",
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
