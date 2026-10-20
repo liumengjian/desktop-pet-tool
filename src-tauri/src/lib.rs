@@ -13,7 +13,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 use percent_encoding::percent_decode_str;
-use windows::Win32::Foundation::POINT;
+use windows::Win32::Foundation::{HWND, POINT};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
@@ -23,7 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const DRAG_DEAD_ZONE: i32 = 6;
 const POLL_MS: u64 = 33;
-const SETTINGS_W: f64 = 460.0;
+const SETTINGS_W: f64 = 540.0;
 const SETTINGS_H: f64 = 380.0;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -276,9 +277,38 @@ fn notify_blur() {}
 // 在 Windows 上，从同步命令中调用 WebviewWindowBuilder::build() 会死锁
 // （WebView2 控制器创建是异步的，需要主线程消息泵，而同步命令阻塞了主线程），
 // 表现为窗口空白、应用卡死或闪退。因此必须使用 async 命令 + run_on_main_thread。
+//
+// 标题栏颜色：默认跟随 Windows 系统强调色（本项目可能是青色系），
+// 这里用 DWM 属性强制覆盖为中性米白背景 + 深灰文字，与设置页配色一致。
+fn set_neutral_titlebar(hwnd: isize) {
+    unsafe {
+        // COLORREF 格式 0x00BBGGRR
+        // 背景 #F7F6FA（页面底色）→ B=FA G=F6 R=F7
+        let bg: u32 = 0x00FAF6F7;
+        // 文字 #333333
+        let fg: u32 = 0x00333333;
+        let _ = DwmSetWindowAttribute(
+            HWND(hwnd as *mut _),
+            DWMWA_CAPTION_COLOR,
+            &bg as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let _ = DwmSetWindowAttribute(
+            HWND(hwnd as *mut _),
+            DWMWA_TEXT_COLOR,
+            &fg as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        );
+    }
+}
+
 #[tauri::command]
 async fn open_settings_command(app: AppHandle) {
     if let Some(w) = app.get_webview_window("settings") {
+        #[cfg(target_os = "windows")]
+        if let Ok(h) = w.hwnd() {
+            set_neutral_titlebar(h.0 as isize);
+        }
         let _ = w.show();
         let _ = w.set_focus();
         return;
@@ -302,6 +332,10 @@ async fn open_settings_command(app: AppHandle) {
         .build()
         {
             Ok(win) => {
+                #[cfg(target_os = "windows")]
+                if let Ok(h) = win.hwnd() {
+                    set_neutral_titlebar(h.0 as isize);
+                }
                 let _ = win.set_focus();
             }
             Err(e) => {

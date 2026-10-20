@@ -20,41 +20,20 @@
     <div id="statusText" class="status-text"></div>
   </div>
 
-  <!-- 圆形悬浮主体：两只动态眼睛 + 表情标记，始终显示，带呼吸效果 -->
+  <!-- 圆形悬浮主体：由 emotion-ball 引擎绘制球体与表情，始终显示 -->
   <div id="floatButton" class="float-button">
     <button id="miniClose" class="mini-close" title="关闭">×</button>
-    <div id="eyes" class="eyes">
-      <!-- 生气时的倒八字眉（默认隐藏） -->
-      <div class="brow left-brow"></div>
-      <div class="eye left-eye">
-        <div class="pupil"></div>
-        <svg class="happy-arc" viewBox="0 0 18 14" fill="none">
-          <path d="M2 10 Q9 0 16 10" stroke="#1f6f6a" stroke-width="4" stroke-linecap="round"/>
-        </svg>
-      </div>
-      <div class="brow right-brow"></div>
-      <div class="eye right-eye">
-        <div class="pupil"></div>
-        <svg class="happy-arc" viewBox="0 0 18 14" fill="none">
-          <path d="M2 10 Q9 0 16 10" stroke="#1f6f6a" stroke-width="4" stroke-linecap="round"/>
-        </svg>
-      </div>
-    </div>
-    <!-- 睡觉标记：zzz 飘出动画（睡觉表情时显示） -->
-    <div class="sleep-mark" id="sleepMark">
-      <span class="z z1">z</span>
-      <span class="z z2">z</span>
-      <span class="z z3">z</span>
-    </div>
-    <!-- 生气标记：四向箭头符号（连续点击三下时显示，缩放呼吸动画） -->
-    <svg id="angryMark" class="angry-mark" viewBox="0 0 1260 1024" width="33" height="27" fill="#2b2f36">
-      <path d="M421.597521 304.607034a137.678996 137.678996 0 0 1-98.021554-40.610538l-83.525835-83.517171 49.015109-49.023774L372.573747 214.990051a69.316046 69.316046 0 0 0 98.021554 0l83.525835-83.5345 49.015109 49.023774-83.525835 83.525835a137.765641 137.765641 0 0 1-98.012889 40.601874zM554.138465 700.34967l-83.525835-83.5345a69.316046 69.316046 0 0 0-98.021554 0l-83.525835 83.5345-49.015109-49.023774 83.525835-83.525835c54.135832-54.135832 141.91594-54.135832 196.051772 0l83.525835 83.517171zM651.371549 597.458664l-83.525835-83.525835c-54.049187-54.179154-54.049187-141.881282 0-196.060437l83.525835-83.525835 49.023774 48.989115-83.5345 83.525836a69.402691 69.402691 0 0 0 0 98.030218l83.5345 83.525835zM180.524977 597.458664L131.501204 548.469548l83.525835-83.525835a69.385362 69.385362 0 0 0 0-98.030218l-83.525835-83.525836 49.023773-49.015109 83.525836 83.525836c54.040522 54.179154 54.040522 141.872617 0 196.051772z"/>
-    </svg>
+    <div id="eb-render"></div>
   </div>
 
   <!-- 消息提示气泡：清理完成、复制成功等（对话冒泡样式，默认隐藏） -->
   <div id="msgBubble" class="bubble msg-bubble hidden"></div>
 
+  <!-- emotion-ball 表情引擎（按依赖顺序加载：几何数据 → 表情数据 → 渲染层 → 驱动层） -->
+  <script src="vendor/emotion-ball/rings.js"></script>
+  <script src="vendor/emotion-ball/emotions.js"></script>
+  <script src="vendor/emotion-ball/ball.js"></script>
+  <script src="vendor/emotion-ball/engine.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

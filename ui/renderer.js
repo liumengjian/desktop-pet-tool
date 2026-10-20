@@ -26,10 +26,18 @@ const progressFill = document.getElementById('progressFill');
 const progressText = document.getElementById('progressText');
 const statusText = document.getElementById('statusText');
 const msgBubble = document.getElementById('msgBubble');
-const eyes = document.getElementById('eyes');
-const pupils = document.querySelectorAll('.pupil');
-const sleepMark = document.getElementById('sleepMark');
-const angryMark = document.getElementById('angryMark');
+
+// ===== emotion-ball 表情引擎 =====
+// 球体 / 眼睛 / 表情 / 粒子全部由引擎在 #eb-render 内渲染；
+// idle:false 关闭引擎自带空闲逻辑，沿用下方现有计时器（1分50秒困 / 2分钟睡）
+const ball = EmotionBall.create('#eb-render', {
+  emotion: '02',    // 默认：待机放空
+  shape: 'blob',    // 圆胖形，最接近现有圆球
+  idle: false,      // 空闲计时由 renderer.js 控制
+  eyeScale: 1.3,    // 小窗口（64px 主体）下放大眼睛保证可读（1.6 过大会连眼，取 1.3）
+  eyeGap: 12,       // 左右眼各外推 12 单位，拉开间距防止眯眼/注视时连到一起
+  zzzScale: 3.0     // 睡眠 zzz 放大 2 倍（64px 小窗下更清晰）
+});
 
 let expanded = false;
 let downloading = false;
@@ -62,12 +70,9 @@ const COLLAPSED_SIZE = [112, 112];
 const EXPANDED_SIZE = [264, 232];
 const MSG_SIZE = [264, 142];
 
-// resize 时暂停主体的呼吸动画，避免窗口尺寸变化时合成层重绘导致主体闪烁
+// resize 窗口尺寸（表情动画由引擎 rAF 驱动，无需额外处理）
 async function resizeWindowSmooth(w, h) {
-  const prev = btn.style.animationPlayState || '';
-  btn.style.animationPlayState = 'paused';
   await window.api.resizeWindow(w, h);
-  requestAnimationFrame(() => { btn.style.animationPlayState = prev; });
 }
 
 async function expand() {
@@ -129,7 +134,7 @@ document.addEventListener('mouseup', (e) => {
     resetIdleTimer();
     if (clickCount >= 3) {
       clickCount = 0;
-      showMood('angry');
+      showMood('21'); // 生气
       return;
     }
     if (expanded) collapse(); else expand();
@@ -167,9 +172,14 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && expanded) collapse();
 });
 
-// ===== 眼睛：随机循环动画（眨眼 / wink / 变大变小 / 大小眼 / 无语） =====
-// 注意：睡觉不在此池中，由空闲 2 分钟触发
-const EYE_ANIMS = ['blink', 'wink', 'bigsmall', 'leftbig', 'rightbig', 'speechless'];
+// ===== 随机表情池 =====
+// 从 32 个表情中剔除固定触发的 5 个（00 睡眠 / 10 开心 / 12 失落 / 15 疲惫 / 21 生气），
+// 其余 27 个全部进入随机池，随机间隔展示后回落“待机放空 02”
+const RANDOM_EMOTIONS = [
+  '01', '02', '03', '04', '05', '06', '07', // 生命周期：唤醒/待机/好奇/发呆/加载苏醒/休眠/抖动唤醒
+  '11', '13', '14', '16', '17', '18', '19', '20', // 情绪：疑惑/惊讶/害羞/专注/慌张/无奈/满意/困惑
+  '30', '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', '41' // 代理状态：思考中/接收任务/忙碌/完成/出错/等待输入/联网加载/回忆/拒绝/回复/检索/停止
+];
 let eyeTimer = null;
 
 // 连续点击三下触发：生气
@@ -182,35 +192,21 @@ function randomOf(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function scheduleEyeAnim() {
   // 随机间隔 1.2s ~ 4.2s 触发一次动画
   const delay = 1200 + Math.random() * 3000;
-  eyeTimer = setTimeout(() => playEyeAnim(randomOf(EYE_ANIMS)), delay);
+  eyeTimer = setTimeout(() => playEyeAnim(), delay);
 }
 
-function playEyeAnim(type) {
-  // 表情展示期间跳过随机动画，避免互相干扰
+function playEyeAnim() {
+  // 表情展示期间（含睡觉）跳过随机动画，避免互相干扰
   if (moodActive) { scheduleEyeAnim(); return; }
-  if (type === 'blink') {
-    eyes.classList.add('blinking');
-    setTimeout(() => eyes.classList.remove('blinking'), 340);
-  } else if (type === 'wink') {
-    const side = Math.random() < 0.5 ? 'left-eye' : 'right-eye';
-    const eye = eyes.querySelector('.' + side);
-    eye.classList.add('winking');
-    setTimeout(() => eye.classList.remove('winking'), 380);
-  } else if (type === 'bigsmall') {
-    eyes.classList.add('bigsmall');
-    setTimeout(() => eyes.classList.remove('bigsmall'), 760);
-  } else {
-    // leftbig / rightbig / speechless / sleep 走表情状态
-    showMood(type);
-  }
+  showMood(randomOf(RANDOM_EMOTIONS), false, 1600 + Math.random() * 400);
   scheduleEyeAnim();
 }
 
-// 页面加载后启动眼睛动画循环
+// 页面加载后启动随机表情循环
 // （空闲睡觉计时 resetIdleTimer 在文件末尾启动，避免 let 变量 TDZ 问题）
 scheduleEyeAnim();
 
-// ===== 表情状态：开心/伤心/大小眼/无语/睡觉/生气 =====
+// ===== 表情状态：由 emotion-ball 引擎渲染，执行时机不变 =====
 let moodTimer = null;
 let moodActive = false;
 // 睡觉持续状态：2 分钟无点击触发，点击主体唤醒
@@ -223,35 +219,33 @@ const IDLE_DROWSY_MS = 110000; // 1 分 50 秒：先犯困（持续 10 秒）
 const IDLE_SLEEP_MS = 120000; // 2 分钟：进入睡眠
 // 各表情展示时长（犯困默认 5 秒，空闲犯困由调用方显式传 10 秒覆盖）
 const MOOD_DURATION = {
-  happy: 2000, sad: 2000, leftbig: 1600, rightbig: 1600,
-  speechless: 1700, sleepy: 5000, sleep: 2800, angry: 3000
+  '10': 2000, // 开心
+  '12': 2000, // 失落（复制失败）
+  '15': 5000, // 疲惫（困，唤醒后 5 秒）
+  '21': 3000  // 生气
 };
-const MOOD_CLASSES = ['happy', 'sad', 'leftbig', 'rightbig', 'speechless', 'sleepy', 'sleep', 'angry'];
+
+// 回落目标：待机放空
+const IDLE_EMOTION = '02';
 
 function clearMood() {
-  eyes.classList.remove(...MOOD_CLASSES);
-  sleepMark.classList.remove('visible');
-  angryMark.classList.remove('visible');
+  ball.setEmotion(IDLE_EMOTION);
   moodActive = false;
   clearTimeout(moodTimer);
 }
 
-function showMood(type, persistent = false, duration) {
+function showMood(id, persistent = false, duration) {
   clearMood();
-  if (MOOD_CLASSES.includes(type)) {
-    eyes.classList.add(type);
-    if (type === 'sleep') sleepMark.classList.add('visible');
-    if (type === 'angry') angryMark.classList.add('visible');
-  }
+  ball.setEmotion(id);
   moodActive = true;
   if (persistent) return; // 持续表情（睡觉）不自动退出，等待点击唤醒
-  moodTimer = setTimeout(clearMood, duration || MOOD_DURATION[type] || 2000);
+  moodTimer = setTimeout(clearMood, duration || MOOD_DURATION[id] || 2000);
 }
 
 // 空闲犯困：1 分 50 秒先播放“困”10 秒，120 秒由 enterSleep 覆盖进入睡眠
 function enterDrowsy() {
   if (sleeping) return;
-  showMood('sleepy', false, 10000);
+  showMood('15', false, 10000); // 疲惫（困）
   // 收尾加守卫：若期间已进入睡眠，则不清场，避免把睡眠表情清掉
   clearTimeout(moodTimer);
   moodTimer = setTimeout(() => { if (!sleeping) clearMood(); }, 10000);
@@ -261,7 +255,7 @@ function enterDrowsy() {
 function enterSleep() {
   sleeping = true;
   waking = false;
-  showMood('sleep', true);
+  showMood('00', true); // 睡眠
 }
 
 // 睡眠被唤醒：先进入“困”5 秒，结束后随机表情自然恢复
@@ -270,8 +264,8 @@ function wakeUp() {
   sleeping = false;
   waking = true;
   clearMood();
-  showMood('sleepy', false, MOOD_DURATION.sleepy);
-  setTimeout(() => { waking = false; }, MOOD_DURATION.sleepy);
+  showMood('15', false, MOOD_DURATION['15']); // 疲惫（困）
+  setTimeout(() => { waking = false; }, MOOD_DURATION['15']);
 }
 
 function resetIdleTimer() {
@@ -282,24 +276,19 @@ function resetIdleTimer() {
 }
 
 // ===== 眼睛：跟随鼠标（整个屏幕范围，主进程每 33ms 轮询全局鼠标位置） =====
-const PUPIL_MAX_SHIFT = 3; // 瞳孔最大偏移量 px
 window.api.onGlobalMouse(({ mx, my, wx, wy }) => {
   // 生气表情时取消瞳孔跟随（愤怒的眼神固定）
-  if (eyes.classList.contains('angry')) return;
+  if (ball.emotionId === '21') { ball.clearGaze(); return; }
   const rect = btn.getBoundingClientRect();
   // 主体中心在屏幕上的坐标 = 窗口位置 + 主体在窗口内的位置
   const cx = wx + rect.left + rect.width / 2;
   const cy = wy + rect.top + rect.height / 2;
-  // 归一化到 [-1, 1]，再限制瞳孔偏移范围
+  // 归一化到 [-1, 1]，交给引擎做眼神跟随
   let dx = (mx - cx) / (rect.width / 2);
   let dy = (my - cy) / (rect.height / 2);
   dx = Math.max(-1, Math.min(1, dx));
   dy = Math.max(-1, Math.min(1, dy));
-  const tx = (dx * PUPIL_MAX_SHIFT).toFixed(2);
-  const ty = (dy * PUPIL_MAX_SHIFT).toFixed(2);
-  pupils.forEach(p => {
-    p.style.transform = `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px))`;
-  });
+  ball.setGaze(dx, dy);
 });
 
 // 输入框回车开始下载
@@ -353,7 +342,7 @@ async function doDownload(url) {
     progressText.textContent = '完成';
     if (result.copiedToClipboard) {
       setStatus('', 'ok');
-      showMood('happy');
+      showMood('10'); // 开心
       // 稍作停留后收起输入气泡，改用消息气泡提示
       setTimeout(() => {
         if (!downloading) {
@@ -368,7 +357,7 @@ async function doDownload(url) {
       }, 1000);
     } else {
       setStatus('✓ 已下载（剪贴板复制受限）', 'ok');
-      showMood('happy');
+      showMood('10'); // 开心
       setTimeout(() => {
         if (!downloading) {
           bubble.classList.add('hidden');
@@ -384,7 +373,7 @@ async function doDownload(url) {
   } else {
     progressWrap.classList.add('hidden');
     setStatus('✗ ' + result.error, 'err');
-    showMood('sad');
+    showMood('12'); // 失落（复制失败）
   }
 }
 
