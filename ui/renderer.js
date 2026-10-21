@@ -13,7 +13,8 @@ window.api = {
   startDrag: () => window.__TAURI__.core.invoke('drag_start'),
   stopDrag: () => window.__TAURI__.core.invoke('drag_end'),
   requestClose: () => window.__TAURI__.core.invoke('request_close'),
-  onGlobalMouse: (cb) => window.__TAURI__.event.listen('mouse-global', (e) => cb(e.payload))
+  onGlobalMouse: (cb) => window.__TAURI__.event.listen('mouse-global', (e) => cb(e.payload)),
+  onOutsideClick: (cb) => window.__TAURI__.event.listen('mouse-outside-click', () => cb())
 };
 
 const btn = document.getElementById('floatButton');
@@ -48,7 +49,7 @@ let msgTimer = null;
 async function showMsg(msg, duration = 2200) {
   // 若输入气泡仍展开，先隐藏（兜底；正常调用前已收起）
   if (expanded) {
-    bubble.classList.add('hidden');
+    bubbleHide(bubble);
     expanded = false;
     urlInput.value = '';
     progressWrap.classList.add('hidden');
@@ -57,11 +58,12 @@ async function showMsg(msg, duration = 2200) {
   }
   clearTimeout(msgTimer);
   msgBubble.textContent = msg;
-  await resizeWindowSmooth(MSG_SIZE[0], MSG_SIZE[1]);
-  msgBubble.classList.remove('hidden');
+  await resizeNow(MSG_SIZE[0], MSG_SIZE[1]);
+  // 等窗口尺寸真正落屏后再播放入场，避免气泡在窗口仍处于收缩尺寸时开始淡入而被裁切
+  requestAnimationFrame(() => bubbleShow(msgBubble));
   msgTimer = setTimeout(() => {
-    msgBubble.classList.add('hidden');
-    resizeWindowSmooth(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
+    bubbleHide(msgBubble);
+    resizeLater(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
   }, duration);
 }
 
@@ -75,23 +77,71 @@ async function resizeWindowSmooth(w, h) {
   await window.api.resizeWindow(w, h);
 }
 
+// ===== 气泡显隐过渡动画（.entering 入场 / .closing 退场，时长与 styles.css 保持一致） =====
+const BUBBLE_HIDE_MS = 200;   // 退场动画时长 ms（styles.css 中 .bubble.closing 的 transition-duration）
+let pendingResize = null;     // 待执行的窗口尺寸调整（等气泡退场结束后再收缩）
+
+// 先让浏览器确认透明的起始样式，再切到可见态，否则同一帧中
+// 去掉 display:none 并设为 opacity:1 会跳过过渡，气泡瞬间出现。
+function bubbleShow(el) {
+  clearTimeout(el._hideTimer);
+  el.classList.remove('closing');
+  el.classList.remove('entering');
+  el.classList.remove('hidden');
+  void el.offsetWidth;
+  el.classList.add('entering');
+}
+
+// 退场：先播插值到隐藏态，动画结束后（BUBBLE_HIDE_MS）再真正置为 display:none
+function bubbleHide(el) {
+  if (el.classList.contains('hidden')) return;
+  clearTimeout(el._hideTimer);
+  el.classList.remove('entering');
+  el.classList.add('closing');
+  el._hideTimer = setTimeout(() => {
+    el.classList.add('hidden');
+    el.classList.remove('closing');
+  }, BUBBLE_HIDE_MS);
+}
+
+// 立即调整窗口尺寸（取消可能待执行的延迟调整，避免旧的收起延迟误触发）
+async function resizeNow(w, h) {
+  clearTimeout(pendingResize);
+  pendingResize = null;
+  await resizeWindowSmooth(w, h);
+}
+
+// 延迟调整窗口尺寸：等气泡退场动画结束后再收缩，避免淡出过程中被窗口边缘裁切
+function resizeLater(w, h, delay = BUBBLE_HIDE_MS) {
+  clearTimeout(pendingResize);
+  pendingResize = setTimeout(() => {
+    pendingResize = null;
+    resizeWindowSmooth(w, h);
+  }, delay);
+}
+
 async function expand() {
   if (expanded) return;
   expanded = true;
-  bubble.classList.remove('hidden');
-  await resizeWindowSmooth(EXPANDED_SIZE[0], EXPANDED_SIZE[1]);
-  setTimeout(() => urlInput.focus(), 50);
+  // 窗口先展开，等尺寸落屏后再播放入场，避免气泡被窗口边缘裁切/闪动
+  await resizeNow(EXPANDED_SIZE[0], EXPANDED_SIZE[1]);
+  requestAnimationFrame(() => {
+    // 收起已先于入场发生（快速切换）时跳过，避免误弹气泡
+    if (!expanded) return;
+    bubbleShow(bubble);
+    setTimeout(() => urlInput.focus(), 50);
+  });
 }
 
 async function collapse() {
   if (!expanded) return;
   expanded = false;
-  bubble.classList.add('hidden');
+  bubbleHide(bubble);
   urlInput.value = '';
   progressWrap.classList.add('hidden');
   statusText.textContent = '';
   statusText.className = 'status-text';
-  await resizeWindowSmooth(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
+  resizeLater(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]); // 退场动画结束后再收缩窗口
 }
 
 // ===== 窗口拖动（手动实现）与点击区分 =====
@@ -109,10 +159,7 @@ function isInteractive(el) {
 document.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
   if (isInteractive(e.target)) return;
-  // 按下主体即唤醒睡觉（点击、拖动都算接触）：先进入“困”过渡
-  if (sleeping && e.target.closest('#floatButton')) {
-    wakeUp();
-  }
+  // 仅记录按下位置并进入拖动预备，不唤醒睡眠（睡眠只能被"点击"取消，见 mouseup）
   downPos = { x: e.screenX, y: e.screenY };
   dragArmed = true;
   window.api.startDrag();
@@ -123,21 +170,28 @@ document.addEventListener('mouseup', (e) => {
   const moved = Math.hypot(e.screenX - downPos.x, e.screenY - downPos.y);
   dragArmed = false;
   window.api.stopDrag();
-  // 未移动视为点击：点击主体切换展开/收起
-  if (moved < DRAG_CLICK_THRESHOLD && e.target.closest('#floatButton')) {
-    // 点击唤醒：先进入“困”过渡（mousedown 已处理，这里兜底）
-    wakeUp();
-    // 连续点击计数：快速点击三下触发生气表情
-    clickCount++;
-    clearTimeout(clickTimer);
-    clickTimer = setTimeout(() => { clickCount = 0; }, CLICK_WINDOW);
-    resetIdleTimer();
-    if (clickCount >= 3) {
-      clickCount = 0;
-      showMood('21'); // 生气
-      return;
+  // 未移动视为点击：点击主体切换展开/收起；点击窗口内其他非对话框区域则收起气泡
+  if (moved < DRAG_CLICK_THRESHOLD) {
+    if (e.target.closest('#floatButton')) {
+      // 只有点击才唤醒睡眠（拖动不再唤醒），先进入“困”过渡
+      wakeUp();
+      // 点击自旋一圈：引擎达速后甩出一圈彩带（进行中的自旋不可打断，重复点击自动忽略）
+      ball.spin(1);
+      // 连续点击计数：快速点击三下触发生气表情
+      clickCount++;
+      clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => { clickCount = 0; }, CLICK_WINDOW);
+      resetIdleTimer();
+      if (clickCount >= 3) {
+        clickCount = 0;
+        showMood('21'); // 生气
+        return;
+      }
+      if (expanded) collapse(); else expand();
+    } else if (expanded && !e.target.closest('#bubble')) {
+      // 点击窗口内空白（输入对话框以外）→ 收起气泡
+      collapse();
     }
-    if (expanded) collapse(); else expand();
   }
 });
 
@@ -346,7 +400,7 @@ async function doDownload(url) {
       // 稍作停留后收起输入气泡，改用消息气泡提示
       setTimeout(() => {
         if (!downloading) {
-          bubble.classList.add('hidden');
+          bubbleHide(bubble);
           expanded = false;
           urlInput.value = '';
           progressWrap.classList.add('hidden');
@@ -360,7 +414,7 @@ async function doDownload(url) {
       showMood('10'); // 开心
       setTimeout(() => {
         if (!downloading) {
-          bubble.classList.add('hidden');
+          bubbleHide(bubble);
           expanded = false;
           urlInput.value = '';
           progressWrap.classList.add('hidden');
@@ -380,6 +434,8 @@ async function doDownload(url) {
 // ===== 主进程触发的事件 =====
 window.api.onActivateInput(() => expand());
 window.api.onToast((msg) => showMsg(msg));
+// 点击主窗口以外的屏幕任意位置（输入对话框以外）→ 收起输入气泡
+window.api.onOutsideClick(() => { if (expanded) collapse(); });
 
 // 所有声明就绪后启动空闲睡觉计时（2 分钟无点击触发睡觉）
 resetIdleTimer();

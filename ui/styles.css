@@ -83,7 +83,12 @@ body {
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.16), 0 1px 4px rgba(0, 0, 0, 0.08);
   padding: 10px 12px;
   z-index: 5;
-  animation: popIn 0.18s ease-out;
+  /* 显隐过渡：元素始终在 opacity 0↔1 之间插值（.entering 入场 / .closing 退场，
+     由 renderer.js 切换），从根源上避免“先整帧显示再播动画”的闪动；
+     退场时长 0.2s 与 renderer.js 中 BUBBLE_HIDE_MS 保持一致 */
+  opacity: 0;
+  transform: translateY(10px) scale(0.96);
+  transition: opacity 0.22s ease-out, transform 0.22s ease-out;
 }
 /* 气泡底部小箭头，指向下方主体中心（主体与气泡右对齐，箭头偏右） */
 .bubble::after {
@@ -98,9 +103,17 @@ body {
   border-radius: 2px;
 }
 .bubble.hidden { display: none; }
-@keyframes popIn {
-  from { opacity: 0; transform: translateY(6px) scale(0.96); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+
+/* 入场：与 base 状态（opacity 0、下移、微缩）通过 transition 插值到完整可见 */
+.bubble.entering {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+/* 退场：插值回隐藏态；时长 0.2s 与 renderer.js 中 BUBBLE_HIDE_MS 一致 */
+.bubble.closing {
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+  transition-duration: 0.2s;
 }
 
 /* 气泡头部：标题 + 关闭按钮 */

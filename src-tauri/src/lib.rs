@@ -4,7 +4,7 @@ use clipboard_rs::Clipboard;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder};
@@ -16,8 +16,10 @@ use percent_encoding::percent_decode_str;
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    CreateRectRgn, DeleteObject, GetMonitorInfoW, HGDIOBJ, MonitorFromPoint, SetWindowRgn,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetSystemMetrics, SYSTEM_METRICS_INDEX,
 };
@@ -64,6 +66,8 @@ struct DownloadResult {
 struct AppState {
     config: Mutex<Config>,
     dragging: AtomicBool,
+    visible_width: AtomicI32,
+    visible_height: AtomicI32,
     drag_origin: Mutex<Option<(i32, i32, i32, i32)>>, // (start_cursor_x, start_cursor_y, win_x, win_y)
     menu: Mutex<Option<Menu<tauri::Wry>>>,
     tray: Mutex<Option<TrayIcon<tauri::Wry>>>,
@@ -96,42 +100,64 @@ fn ensure_temp_dir(cfg: &Config) -> std::io::Result<()> {
 
 // ============== 全局鼠标轮询 + 手动拖动（16ms 拖动 / 33ms 事件） ==============
 fn start_global_tracking(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        let state = app.state::<AppState>();
-        let mut pt = POINT::default();
-        unsafe {
-            let _ = GetCursorPos(&mut pt);
-        }
-        let (mx, my) = (pt.x, pt.y);
-        let win = app.get_webview_window("main");
-        let (wx, wy) = match &win {
-            Some(w) => match w.outer_position() {
-                Ok(p) => (p.x, p.y),
-                Err(_) => (0, 0),
-            },
-            None => (0, 0),
-        };
+    std::thread::spawn(move || {
+        // 左键按下状态（上一轮），用于检测按下沿
+        let mut was_down = false;
+        loop {
+            let state = app.state::<AppState>();
+            let mut pt = POINT::default();
+            unsafe {
+                let _ = GetCursorPos(&mut pt);
+            }
+            let (mx, my) = (pt.x, pt.y);
+            let win = app.get_webview_window("main");
+            let (wx, wy) = match &win {
+                Some(w) => match w.outer_position() {
+                    Ok(p) => (p.x, p.y),
+                    Err(_) => (0, 0),
+                },
+                None => (0, 0),
+            };
+            let (ww, wh) = match &win {
+                Some(w) => match w.outer_size() {
+                    Ok(s) => (s.width as i32, s.height as i32),
+                    Err(_) => (0, 0),
+                },
+                None => (0, 0),
+            };
 
-        if state.dragging.load(Ordering::SeqCst) {
-            if let Some((sx, sy, w0x, w0y)) = *state.drag_origin.lock().unwrap() {
-                let dist = ((mx - sx).pow(2) + (my - sy).pow(2)) as f64;
-                if dist.sqrt() >= DRAG_DEAD_ZONE as f64 {
-                    if let Some(w) = &win {
-                        let nx = mx - (sx - w0x);
-                        let ny = my - (sy - w0y);
-                        let _ = w.set_position(tauri::PhysicalPosition::new(nx, ny));
+            // 左键按下沿检测（VK_LBUTTON = 0x01，返回值 MSB 置位表示按下）。
+            // 按下点位于主窗口矩形之外时，通知前端收起输入气泡（点击空白处消失）。
+            let down = unsafe { GetAsyncKeyState(0x01) } < 0;
+            let visible_w = state.visible_width.load(Ordering::SeqCst);
+            let visible_h = state.visible_height.load(Ordering::SeqCst);
+            if down && !was_down && !(mx >= wx + ww - visible_w && mx < wx + ww
+                && my >= wy + wh - visible_h && my < wy + wh) {
+                let _ = app.emit_to("main", "mouse-outside-click", ());
+            }
+            was_down = down;
+
+            if state.dragging.load(Ordering::SeqCst) {
+                if let Some((sx, sy, w0x, w0y)) = *state.drag_origin.lock().unwrap() {
+                    let dist = ((mx - sx).pow(2) + (my - sy).pow(2)) as f64;
+                    if dist.sqrt() >= DRAG_DEAD_ZONE as f64 {
+                        if let Some(w) = &win {
+                            let nx = mx - (sx - w0x);
+                            let ny = my - (sy - w0y);
+                            let _ = w.set_position(tauri::PhysicalPosition::new(nx, ny));
+                        }
                     }
                 }
             }
-        }
 
-        let _ = app.emit_to(
-            "main",
-            "mouse-global",
-            serde_json::json!({ "mx": mx, "my": my, "wx": wx, "wy": wy }),
-        );
-        drop(state);
-        std::thread::sleep(Duration::from_millis(POLL_MS));
+            let _ = app.emit_to(
+                "main",
+                "mouse-global",
+                serde_json::json!({ "mx": mx, "my": my, "wx": wx, "wy": wy }),
+            );
+            drop(state);
+            std::thread::sleep(Duration::from_millis(POLL_MS));
+        }
     });
 }
 
@@ -221,13 +247,32 @@ async fn config_pick_temp_dir(
 #[tauri::command]
 fn window_resize(window: tauri::WebviewWindow, w: f64, h: f64) {
     let scale = window.scale_factor().unwrap_or(1.0);
-    let pw = (w * scale) as i32;
-    let ph = (h * scale) as i32;
-    if let (Ok(size), Ok(pos)) = (window.outer_size(), window.outer_position()) {
-        let right = pos.x + size.width as i32;
-        let bottom = pos.y + size.height as i32;
-        let _ = window.set_position(tauri::PhysicalPosition::new(right - pw, bottom - ph));
-        let _ = window.set_size(tauri::PhysicalSize::new(pw as u32, ph as u32));
+    if let (Ok(size), Ok(hwnd)) = (window.outer_size(), window.hwnd()) {
+        let width = size.width as i32;
+        let height = size.height as i32;
+        let visible_w = (w * scale).round() as i32;
+        let visible_h = (h * scale).round() as i32;
+        // 只改变窗口可见且可点击的区域。WebView2 的实际尺寸保持不变，
+        // 球体的绘制表面不会因弹出/收起气泡而重新创建或闪白。
+        let region = unsafe {
+            CreateRectRgn(
+                (width - visible_w).max(0),
+                (height - visible_h).max(0),
+                width,
+                height,
+            )
+        };
+        if !region.0.is_null() {
+            // Tauri 的 HWND 来自另一个 windows crate 版本，转换原始句柄即可。
+            let result = unsafe { SetWindowRgn(HWND(hwnd.0 as *mut _), Some(region), false) };
+            if result == 0 {
+                unsafe { let _ = DeleteObject(HGDIOBJ(region.0)); }
+            } else {
+                let state = window.app_handle().state::<AppState>();
+                state.visible_width.store(visible_w, Ordering::SeqCst);
+                state.visible_height.store(visible_h, Ordering::SeqCst);
+            }
+        }
     }
 }
 
@@ -566,6 +611,8 @@ pub fn run() {
         .manage(AppState {
             config: Mutex::new(Config::default()),
             dragging: AtomicBool::new(false),
+            visible_width: AtomicI32::new(112),
+            visible_height: AtomicI32::new(112),
             drag_origin: Mutex::new(None),
             menu: Mutex::new(None),
             tray: Mutex::new(None),
@@ -620,7 +667,12 @@ pub fn run() {
             // 主窗口初始位置：右下角偏上
             let main = app.get_webview_window("main").unwrap();
             let (sw, sh) = primary_work_area();
-            let _ = main.set_position(tauri::PhysicalPosition::new(sw - 160, sh - 220));
+            // 保持原来悬浮球的位置；窗口变大后，其右下角仍落在同一屏幕点。
+            let scale = main.scale_factor().unwrap_or(1.0);
+            let offset_x = (152.0 * scale).round() as i32;
+            let offset_y = (120.0 * scale).round() as i32;
+            let _ = main.set_position(tauri::PhysicalPosition::new(sw - 160 - offset_x, sh - 220 - offset_y));
+            window_resize(main.clone(), 112.0, 112.0);
             let _ = main.show();
             // 注册在 App 级别：既能收到托盘菜单事件，也能收到窗口弹出菜单事件
             // （窗口级 on_menu_event 只处理该窗口自身的菜单，收不到托盘菜单的点击）。
