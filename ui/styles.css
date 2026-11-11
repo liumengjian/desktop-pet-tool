@@ -210,3 +210,267 @@ body {
   text-align: center;
   white-space: nowrap;
 }
+
+/* ===== 文档工具气泡：拖入文件后在球上方浮出，替代原来的独立窗口 ===== */
+.docs-bubble {
+  width: 320px;
+  padding: 12px 14px 14px;
+}
+.docs-bubble .bubble-title { font-size: 12px; }
+
+.docs-files {
+  max-height: 96px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.docs-files::-webkit-scrollbar { width: 4px; }
+.docs-files::-webkit-scrollbar-thumb { background: #d8d8d8; border-radius: 2px; }
+
+.docs-empty {
+  font-size: 11px;
+  color: #999;
+  line-height: 1.5;
+  padding: 2px 0 4px;
+}
+
+.docs-file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 11px;
+  color: #333;
+}
+.docs-file-row .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.docs-file-row .size { color: #999; flex: none; }
+.docs-file-row .remove {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  color: #bbb;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.docs-file-row .remove:hover { background: #f2f2f2; color: #d9534f; }
+
+.docs-modes {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-card {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1.5px solid #e2e2e2;
+  border-radius: 10px;
+  background: #fafafa;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.mode-card:hover { border-color: #c9c9c9; background: #fff; }
+.mode-card.active {
+  border-color: #444;
+  background: #fff;
+}
+.mode-card .mode-name { font-size: 12px; font-weight: 600; color: #333; }
+.mode-card .mode-sub { font-size: 10px; color: #999; }
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.chip-row.hidden { display: none; }
+
+.chip {
+  padding: 4px 10px;
+  border: 1.5px solid #e2e2e2;
+  border-radius: 12px;
+  background: #fafafa;
+  color: #555;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.chip:hover { border-color: #c9c9c9; color: #333; }
+.chip.active {
+  border-color: #444;
+  background: #444;
+  color: #fff;
+}
+
+.docs-hint {
+  font-size: 10px;
+  color: #999;
+  line-height: 1.5;
+  margin-top: 8px;
+  min-height: 13px;
+}
+
+.docs-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.link-btn {
+  border: none;
+  background: transparent;
+  color: #888;
+  font-size: 11px;
+  padding: 4px 2px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link-btn:hover { color: #333; }
+
+.primary-btn {
+  border: none;
+  border-radius: 14px;
+  padding: 6px 16px;
+  background: #444;
+  color: #fff;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.primary-btn:hover { background: #222; }
+.primary-btn:disabled { background: #ddd; color: #aaa; cursor: default; }
+
+.secondary-btn {
+  border: 1.5px solid #ddd;
+  border-radius: 14px;
+  padding: 5px 12px;
+  background: #fff;
+  color: #444;
+  font-size: 11px;
+  cursor: pointer;
+}
+.secondary-btn:hover { border-color: #bbb; }
+.secondary-btn:disabled { color: #bbb; cursor: default; }
+
+.hidden { display: none; }
+
+.docs-run-name {
+  font-size: 11px;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 6px;
+}
+.docs-run .progress-fill {
+  background: linear-gradient(90deg, #6f6f6f, #444);
+}
+.docs-run-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #999;
+  margin-top: 4px;
+}
+.docs-run-row span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 8px;
+}
+
+.docs-done-msg {
+  font-size: 11px;
+  color: #444;
+  line-height: 1.5;
+}
+.docs-results {
+  margin-top: 6px;
+  max-height: 110px;
+  overflow-y: auto;
+}
+.docs-results::-webkit-scrollbar { width: 4px; }
+.docs-results::-webkit-scrollbar-thumb { background: #d8d8d8; border-radius: 2px; }
+
+.docs-result-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 10px;
+  color: #666;
+  padding: 2px 0;
+}
+.docs-result-row .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #333;
+}
+.docs-result-row .delta { flex: none; color: #3a9d5d; }
+
+/* ===== 球体进度环与百分比胶囊 ===== */
+.ball-progress {
+  position: absolute;
+  bottom: 20px;
+  right: 18px;
+  width: 72px;
+  height: 72px;
+  pointer-events: none;
+  z-index: 12;
+}
+.ball-progress.hidden { display: none; }
+.ball-progress .ring { width: 100%; height: 100%; }
+.ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 7;
+}
+.ring-arc {
+  fill: none;
+  stroke: #444;
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-dasharray: 289;
+  stroke-dashoffset: 289;
+  transition: stroke-dashoffset 0.2s ease;
+  transform-origin: 50% 50%;
+  transform: rotate(-90deg);
+}
+
+.ball-pct {
+  position: absolute;
+  bottom: 2px;
+  right: 22px;
+  width: 64px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 13;
+}
+.ball-pct.hidden { display: none; }
+.ball-pct span {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  font-size: 10px;
+  color: #333;
+}

@@ -1,0 +1,192 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* 作者样式里的 display 会盖过 UA 的 [hidden]{display:none}（例如 .footer 的 flex），
+   导致 hidden 的区块仍在占位并显示。这里统一兜底。 */
+[hidden] { display: none !important; }
+
+body {
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: #f7f6fa;
+  color: #333;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 24px 18px;
+}
+
+.head { margin-bottom: 16px; }
+.head .title { font-size: 17px; font-weight: 600; color: #2f2f36; }
+.head .sub { margin-top: 5px; font-size: 12px; color: #8b8898; }
+
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
+
+.panel {
+  background: #fff;
+  border: 1px solid #eae8f0;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: #4a4856;
+  margin-bottom: 10px;
+}
+
+.ghost {
+  border: 1px solid #dcd9e5;
+  background: #fff;
+  color: #55535f;
+  font-size: 12px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.ghost:hover { background: #f2f0f7; border-color: #c9c5d6; }
+
+.filelist { list-style: none; display: flex; flex-direction: column; gap: 8px; max-height: 168px; overflow: auto; }
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #faf9fc;
+  border: 1px solid #efedf4;
+  border-radius: 8px;
+}
+.file-row .name { flex: 1; font-size: 13px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-row .size { font-size: 11px; color: #8b8898; }
+.file-row .kind {
+  font-size: 11px;
+  color: #5c7286;
+  background: #eef3f7;
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+.file-row .remove {
+  border: none; background: transparent; color: #b3b0bd; cursor: pointer; font-size: 15px; line-height: 1;
+}
+.file-row .remove:hover { color: #d9534f; }
+
+.empty { font-size: 12px; color: #a8a5b3; padding: 10px 2px; }
+
+.hint { font-size: 11px; color: #a19eac; margin-top: 10px; line-height: 1.6; }
+
+.modes { display: flex; gap: 10px; }
+.mode {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 1px solid #e4e1ec;
+  background: #fbfafd;
+  border-radius: 9px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .15s, background .15s;
+}
+.mode b { font-size: 14px; color: #333; }
+.mode span { font-size: 11px; color: #8b8898; }
+.mode:hover { border-color: #cfcada; }
+.mode.active { border-color: #3c3c3c; background: #fff; box-shadow: 0 0 0 1px #3c3c3c inset; }
+
+.sub { margin-top: 14px; }
+.sub label { display: block; font-size: 12px; color: #8b8898; margin-bottom: 8px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  border: 1px solid #e4e1ec;
+  background: #fff;
+  color: #55535f;
+  font-size: 12px;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 15px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.chip:hover { border-color: #cfcada; }
+.chip.active { border-color: #3c3c3c; background: #3c3c3c; color: #fff; }
+.chip.disabled { opacity: .45; cursor: not-allowed; }
+
+.notice {
+  font-size: 12px;
+  color: #8a6420;
+  background: #fdf6e8;
+  border: 1px solid #f0e2c6;
+  border-radius: 8px;
+  padding: 9px 12px;
+  white-space: pre-line;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 16px;
+}
+.foot-note { font-size: 11px; color: #a19eac; }
+
+.primary {
+  height: 36px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 8px;
+  background: #3c3c3c;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.primary:hover { background: #555; }
+.primary:disabled { background: #c9c6d2; cursor: not-allowed; }
+
+.stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 8px 4px;
+}
+.stage[hidden] { display: none; }
+
+.run-title { font-size: 15px; font-weight: 600; color: #2f2f36; }
+.run-file { font-size: 12px; color: #8b8898; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar { height: 6px; background: #eceaf3; border-radius: 3px; overflow: hidden; }
+.bar-fill { height: 100%; width: 0; background: linear-gradient(90deg, #6f6b7d, #9d99ad); transition: width .2s; }
+.run-meta { display: flex; justify-content: space-between; font-size: 11px; color: #8b8898; }
+.wide { width: 100%; height: 32px; }
+
+.done-title { font-size: 15px; font-weight: 600; color: #2f2f36; }
+.done-msg { font-size: 12px; color: #8b8898; white-space: pre-line; line-height: 1.7; }
+
+.resultlist { list-style: none; display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; }
+.result-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px;
+  padding: 8px 10px;
+  background: #faf9fc;
+  border: 1px solid #efedf4;
+  border-radius: 8px;
+}
+.result-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #333; }
+.result-row .delta { color: #3f8a63; font-weight: 600; }
+.result-row .delta.flat { color: #8b8898; font-weight: 400; }
+
+.done-dir { font-size: 11px; color: #a19eac; word-break: break-all; }
+.done-actions { display: flex; gap: 10px; }

@@ -12,8 +12,8 @@
       {
         "label": "main",
         "title": "desktop-pet-tool",
-        "width": 264,
-        "height": 232,
+        "width": 420,
+        "height": 620,
         "resizable": false,
         "maximizable": false,
         "minimizable": false,

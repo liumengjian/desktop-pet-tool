@@ -27,7 +27,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const DRAG_DEAD_ZONE: i32 = 6;
 const POLL_MS: u64 = 33;
 const SETTINGS_W: f64 = 540.0;
-const SETTINGS_H: f64 = 380.0;
+/// settings.html 的内容实测 340px（540 宽下 body scrollHeight），
+/// 窗口内高按内容给足 2px 余量，避免按钮下方出现大片空白。
+const SETTINGS_H: f64 = 360.0;
+/// 主窗口逻辑尺寸。窗口本身透明且用 SetWindowRgn 裁出可见区域，
+/// 尺寸给足是为了让文档气泡（列表 / 按钮 / 结果）有足够的可视空间。
+const MAIN_W: f64 = 420.0;
+const MAIN_H: f64 = 620.0;
+
+mod docs;
+mod drop_target;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -187,6 +196,24 @@ fn primary_work_area() -> (i32, i32) {
         let sw = GetSystemMetrics(SYSTEM_METRICS_INDEX(78)); // SM_CXVIRTUALSCREEN
         let sh = GetSystemMetrics(SYSTEM_METRICS_INDEX(79)); // SM_CYVIRTUALSCREEN
         (sw, sh)
+    }
+}
+
+// ============== 诊断日志 ==============
+// 拖放链路跑在 SysWOW/OLE 的回调里，出问题时 release 包没有控制台可看，
+// 所以把关键节点追加到 %TEMP%\desktop-pet-docs.log，方便现场定位。
+pub fn diag(message: &str) {
+    let path = std::env::temp_dir().join("desktop-pet-docs.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(file, "{} {}", ms, message);
     }
 }
 
@@ -402,19 +429,74 @@ fn close_settings(app: AppHandle) {
     }
 }
 
+// ============== 文档工具（悬浮球内联） ==============
+// 不再单独建窗口：拖进来的文件只入队，然后让悬浮球弹出对话气泡，
+// 由气泡完成「转换 / 压缩 → 开始 → 进度 → 完成」整条交互。
+
+/// 拖放接收器专用入口：入队后通知悬浮球弹出文档气泡。
+///
+/// 注意：这里**不建窗口**。早先在 `IDropTarget::Drop` 回调里建 WebView2 窗口会
+/// 因为拖放模态循环仍在运行而拿不到主线程消息泵，导致整个应用卡死退出。
+/// 现在只做入队 + 事件通知，回调和事件循环都能正常返回。
+pub fn stage_and_open_docs(app: &AppHandle, paths: Vec<String>) {
+    {
+        let state = app.state::<docs::DocsState>();
+        let mut pending = state.pending.lock().unwrap();
+        for p in paths.iter() {
+            if !pending.contains(p) {
+                pending.push(p.clone());
+            }
+        }
+    }
+    diag(&format!("drop staged {} 个文件，通知悬浮球", paths.len()));
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        // 等 Drop 回调真正返回（DoDragDrop 的模态循环随之退出）再通知前端，
+        // 避免在 OLE 模态循环里同步驱动 webview。直接轮询标记，最多等 2 秒兜底。
+        let start = std::time::Instant::now();
+        while crate::drop_target::drop_in_flight() && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        open_docs(&app_handle, None);
+    });
+}
+
+/// 入队 + 让悬浮球把文档气泡弹出来（菜单「文档工具」与拖放共用）。
+fn open_docs(app: &AppHandle, paths: Option<Vec<String>>) {
+    if let Some(list) = paths {
+        let state = app.state::<docs::DocsState>();
+        let mut pending = state.pending.lock().unwrap();
+        for p in list {
+            if !pending.contains(&p) {
+                pending.push(p);
+            }
+        }
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.emit("docs-staged", ());
+    }
+}
+
 // ============== 菜单 ==============
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let cfg = app.state::<AppState>().config.lock().unwrap().clone();
-    let paste = MenuItemBuilder::with_id("paste", "粘贴文件链接…").build(app)?;
-    let settings = MenuItemBuilder::with_id("settings", "设置").build(app)?;
+    // 分区一：文档相关
+    let paste = MenuItemBuilder::with_id("paste", "文档复制").build(app)?;
+    let docs = MenuItemBuilder::with_id("docs", "文档工具").build(app)?;
+    // 分区二：临时文件夹与程序设置
     let open = MenuItemBuilder::with_id("open", "打开临时文件夹").build(app)?;
     let clean = MenuItemBuilder::with_id("clean", "清理临时文件夹").build(app)?;
+    let settings = MenuItemBuilder::with_id("settings", "设置").build(app)?;
     let autostart = CheckMenuItemBuilder::with_id("autostart", "开机自启动")
         .checked(cfg.auto_start)
         .build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
     MenuBuilder::new(app)
-        .items(&[&paste, &settings, &open, &clean, &autostart, &quit])
+        .items(&[&paste, &docs])
+        .separator()
+        .items(&[&open, &clean, &settings, &autostart, &quit])
         .build()
 }
 
@@ -428,6 +510,9 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             let _ = tauri::async_runtime::spawn(async move {
                 open_settings_command(app_owned).await;
             });
+        }
+        "docs" => {
+            open_docs(app, None);
         }
         "open" => {
             let cfg = app.state::<AppState>().config.lock().unwrap().clone();
@@ -617,6 +702,7 @@ pub fn run() {
             menu: Mutex::new(None),
             tray: Mutex::new(None),
         })
+        .manage(docs::DocsState::default())
         .setup(|app| {
             let cfg = load_config(app.handle());
             {
@@ -667,13 +753,27 @@ pub fn run() {
             // 主窗口初始位置：右下角偏上
             let main = app.get_webview_window("main").unwrap();
             let (sw, sh) = primary_work_area();
-            // 保持原来悬浮球的位置；窗口变大后，其右下角仍落在同一屏幕点。
+            // 保持悬浮球原来的屏幕位置：窗口右下角固定落在「屏宽-48 / 任务栏上沿-108」，
+            // 窗口变大（文档气泡需要更高更宽的可视区域）时只向左上扩展。
             let scale = main.scale_factor().unwrap_or(1.0);
-            let offset_x = (152.0 * scale).round() as i32;
-            let offset_y = (120.0 * scale).round() as i32;
-            let _ = main.set_position(tauri::PhysicalPosition::new(sw - 160 - offset_x, sh - 220 - offset_y));
+            let win_w = (MAIN_W * scale).round() as i32;
+            let win_h = (MAIN_H * scale).round() as i32;
+            let margin_r = (48.0 * scale).round() as i32;
+            let margin_b = (108.0 * scale).round() as i32;
+            let _ = main.set_position(tauri::PhysicalPosition::new(
+                sw - margin_r - win_w,
+                sh - margin_b - win_h,
+            ));
             window_resize(main.clone(), 112.0, 112.0);
             let _ = main.show();
+            // 窗口显示之后再接管拖放：此时 WebView2 的子窗口都已建出，
+            // 能把主窗口和它们的 IDropTarget 一起换成自己的实现（原因见 drop_target.rs 顶部注释）。
+            if let Ok(h) = main.hwnd() {
+                drop_target::install(
+                    AppHandle::clone(app.handle()),
+                    HWND(h.0 as *mut _),
+                );
+            }
             // 注册在 App 级别：既能收到托盘菜单事件，也能收到窗口弹出菜单事件
             // （窗口级 on_menu_event 只处理该窗口自身的菜单，收不到托盘菜单的点击）。
             app.on_menu_event(|app_handle, event| handle_menu_event(app_handle, event));
@@ -693,7 +793,14 @@ pub fn run() {
             open_context_menu,
             notify_blur,
             open_settings_command,
-            close_settings
+            close_settings,
+            docs::docs_pick_files,
+            docs::docs_stage,
+            docs::docs_take_pending,
+            docs::docs_inspect,
+            docs::docs_start,
+            docs::docs_cancel,
+            docs::docs_open_outdir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

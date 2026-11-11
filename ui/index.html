@@ -20,11 +20,77 @@
     <div id="statusText" class="status-text"></div>
   </div>
 
+  <!-- 文档工具气泡：拖入文件后浮出，转换 / 压缩 → 选项 → 进度 → 完成，全在球边完成 -->
+  <div id="docsBubble" class="bubble docs-bubble hidden">
+    <div class="bubble-header">
+      <span id="docsTitle" class="bubble-title">文档工具</span>
+      <button id="docsClose" class="bubble-close" title="收起">×</button>
+    </div>
+    <div id="docsBody">
+      <div id="docsFiles" class="docs-files"></div>
+
+      <div id="docsModes" class="docs-modes">
+        <button id="docsModeConvert" class="mode-card">
+          <span class="mode-name">转换</span>
+          <span class="mode-sub">换成别的格式</span>
+        </button>
+        <button id="docsModeCompress" class="mode-card">
+          <span class="mode-name">压缩</span>
+          <span class="mode-sub">更小 / 标准 / 更清晰</span>
+        </button>
+      </div>
+
+      <div id="docsTargets" class="chip-row hidden"></div>
+      <div id="docsLevels" class="chip-row hidden">
+        <button class="chip" data-level="small">更小</button>
+        <button class="chip active" data-level="normal">标准</button>
+        <button class="chip" data-level="high">更清晰</button>
+      </div>
+
+      <div id="docsHint" class="docs-hint"></div>
+
+      <div id="docsActions" class="docs-actions">
+        <button id="docsPick" class="link-btn">选择文件</button>
+        <button id="docsStart" class="primary-btn" disabled>开始处理</button>
+      </div>
+
+      <div id="docsRun" class="hidden">
+        <div id="docsRunName" class="docs-run-name"></div>
+        <div class="progress-bar"><div id="docsRunFill" class="progress-fill"></div></div>
+        <div class="docs-run-row">
+          <span id="docsRunLabel"></span>
+          <span id="docsRunPct">0%</span>
+        </div>
+        <div class="docs-actions">
+          <button id="docsCancel" class="link-btn">取消</button>
+        </div>
+      </div>
+
+      <div id="docsDone" class="hidden">
+        <div id="docsDoneMsg" class="docs-done-msg"></div>
+        <div id="docsResults" class="docs-results"></div>
+        <div class="docs-actions">
+          <button id="docsOpenDir" class="secondary-btn">打开临时文件夹</button>
+          <button id="docsAgain" class="primary-btn">完成</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 圆形悬浮主体：由 emotion-ball 引擎绘制球体与表情，始终显示 -->
   <div id="floatButton" class="float-button">
     <button id="miniClose" class="mini-close" title="关闭">×</button>
     <div id="eb-render"></div>
   </div>
+
+  <!-- 球体外圈的进度环 + 球下方百分比胶囊：文档任务进行中显示 -->
+  <div id="ballProgress" class="ball-progress hidden">
+    <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
+      <circle class="ring-track" cx="50" cy="50" r="46"></circle>
+      <circle id="ringArc" class="ring-arc" cx="50" cy="50" r="46"></circle>
+    </svg>
+  </div>
+  <div id="ballPctPill" class="ball-pct hidden"><span id="ballPct">0%</span></div>
 
   <!-- 消息提示气泡：清理完成、复制成功等（对话冒泡样式，默认隐藏） -->
   <div id="msgBubble" class="bubble msg-bubble hidden"></div>

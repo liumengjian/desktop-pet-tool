@@ -16,10 +16,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["rustls-tls", "stream"], default-features = false }
 clipboard-rs = "0.3"
-windows = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_SystemServices"] }
+windows-core = "0.59"
 futures-util = "0.3"
 url = "2"
 percent-encoding = "2"
+image = { version = "0.25.6", default-features = false, features = ["png", "jpeg", "bmp", "gif", "tiff", "webp"] }
+flate2 = "1"
+lopdf = "0.36.0"
+encoding_rs = "0.8"
+# 旧版 .doc 是 OLE 复合文档（CFB）容器，需要读流
+cfb = "0.14"
 
 [profile.release]
 codegen-units = 1
