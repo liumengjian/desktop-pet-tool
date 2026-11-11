@@ -1,5 +1,7 @@
 # desktop-pet-tool
 
+中文 | [English](README.en.md)
+
 一个 **Tauri** 桌面悬浮球：一边把在线文件链接变成可直接粘贴的文件，一边把拖进来的文档就地转换 / 压缩。
 安装包约 **10.4 MB**（基于系统 WebView2，无内置浏览器内核；体积主要来自内置中文字库）。
 
@@ -32,7 +34,16 @@
 5. 完成后弹**结果气泡**：每个文件的体积变化 + 「打开临时文件夹」按钮
 6. 中途收起气泡，任务照常跑，进度仍显示在球上
 
-产物统一落到**临时文件夹**（默认 `%TEMP%\file-paste-float`），与「文档复制」下载的文件同一个目录，右键「清理临时文件夹」可以一次清干净。
+产物统一落到**临时文件夹**（默认 `%TEMP%\desktop-pet-tool`），与「文档复制」下载的文件同一个目录，右键「清理临时文件夹」可以一次清干净。
+
+## 界面语言
+
+支持**中文（默认）**与**英文**两套界面：
+
+- 在**设置 → 语言 / Language** 切换，立即生效，不需要点保存
+- 主进程侧同步：右键菜单、托盘菜单、系统对话框标题、文档任务提示
+- 前端侧同步：粘贴气泡、文档气泡、结果行、设置页
+- 选择记录在 `config.json` 的 `lang`（`zh` | `en`）；旧配置文件没有这个字段时按中文处理
 
 ## 支持格式与转换矩阵
 
@@ -118,10 +129,12 @@ cargo run --offline --quiet -- compress <文件> small   # 单文件压缩直测
 | `ui\index.html` | 悬浮球 UI（输入气泡、文档气泡、emotion-ball 渲染容器、进度环） |
 | `ui\styles.css` | 样式（气泡、文档面板、chips、球体进度环） |
 | `ui\renderer.js` | 交互逻辑（点击/拖动/表情/下载/文档气泡状态机） |
+| `ui\i18n.js` | 中英文案字典、`t()` 占位替换、`data-i18n` 静态文案应用 |
 | `ui\settings.html` | 设置窗口（540px 宽） |
 | `ui\docs.html` `ui\docs.js` `ui\docs.css` | 旧版独立「文档工具窗口」页面，**当前已不再打开**（逻辑已并入 `renderer.js`），保留待清理 |
 | `ui\vendor\emotion-ball\` | emotion-ball 表情引擎（rings / emotions / ball / engine，原样引入） |
 | `src-tauri\src\lib.rs` | Rust 主进程：窗口与可见区域裁剪、全局鼠标轮询、拖动、下载、剪贴板、托盘与右键菜单、配置、文档命令注册 |
+| `src-tauri\src\i18n.rs` | 主进程语言状态（`t(zh, en)`），服务菜单、托盘、对话框与文档提示 |
 | `src-tauri\src\drop_target.rs` | OLE 拖放接收器（拖入文件 → 入队 → 通知悬浮球） |
 | `src-tauri\src\docs\mod.rs` | 文档任务调度：格式分类矩阵、任务线程、进度/完成事件、输出目录 |
 | `src-tauri\src\docs\` 其余模块 | `office_ops` / `image_ops` / `pdf_ops` / `pdf_render` / `pdf_text` / `pdf_font` / `pdf_stream` / `pdf_extract` / `pdf_write` / `legacy` / `from_pdf` / `office_write` / `to_pdf` / `text_ops` / `pptx_write` / `zip_min` / `doc_binary` |
@@ -136,7 +149,8 @@ cargo run --offline --quiet -- compress <文件> small   # 单文件压缩直测
 - **文档交互全部在球上**：主窗口本身 420×620，但用 `SetWindowRgn` 只保留右下角可视区域，球的位置与原来一致；展开气泡时只放大可点击区域
 - **事件投递**：文档进度 / 完成事件发往主窗口（`docs-progress` / `docs-done`），不再有独立的 `docs` 窗口
 - **拖放安全**：文件拖入只在 `IDropTarget::Drop` 里入队，等 OLE 拖放循环退出后才通知前端，避免在拖放回调里同步驱动 WebView2 造成卡死
-- **输出目录统一**：`resolve_output_dir()` 读配置的 `temp_dir`（默认 `%TEMP%\file-paste-float`），「打开临时文件夹」与「清理临时文件夹」对全部产物生效
+- **语言切换**：设置页写入配置后由 `config_set` 重建托盘菜单并向主窗口 / 设置窗口发 `config-changed`，前端就地重绘；主进程文案走 `i18n::t(中文, English)`
+- **输出目录统一**：`resolve_output_dir()` 读配置的 `temp_dir`（默认 `%TEMP%\desktop-pet-tool`），「打开临时文件夹」与「清理临时文件夹」对全部产物生效
 
 ## 已知限制
 
@@ -150,4 +164,4 @@ cargo run --offline --quiet -- compress <文件> small   # 单文件压缩直测
 
 ## 配置文件位置
 
-`%APPDATA%\com.desktop-pet-tool.float\config.json`，记录临时目录路径、置顶、自启、关闭行为等设置。
+`%APPDATA%\com.desktop-pet-tool.float\config.json`，记录临时目录路径、置顶、自启、关闭行为、界面语言（`lang`）等设置。

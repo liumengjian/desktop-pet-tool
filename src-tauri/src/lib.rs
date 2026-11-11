@@ -7,7 +7,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::menu::{CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder};
+use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItem, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
@@ -27,9 +27,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const DRAG_DEAD_ZONE: i32 = 6;
 const POLL_MS: u64 = 33;
 const SETTINGS_W: f64 = 540.0;
-/// settings.html 的内容实测 340px（540 宽下 body scrollHeight），
-/// 窗口内高按内容给足 2px 余量，避免按钮下方出现大片空白。
-const SETTINGS_H: f64 = 360.0;
+/// settings.html 的内容实测 409px（540 宽下 body scrollHeight，含语言行），
+/// 窗口内高按内容给足余量，避免按钮下方出现空白或出现滚动条。
+const SETTINGS_H: f64 = 412.0;
 /// 主窗口逻辑尺寸。窗口本身透明且用 SetWindowRgn 裁出可见区域，
 /// 尺寸给足是为了让文档气泡（列表 / 按钮 / 结果）有足够的可视空间。
 const MAIN_W: f64 = 420.0;
@@ -37,6 +37,7 @@ const MAIN_H: f64 = 620.0;
 
 mod docs;
 mod drop_target;
+mod i18n;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -45,13 +46,20 @@ struct Config {
     always_on_top: bool,
     auto_start: bool,
     close_to_tray: bool,
+    /// 界面语言：zh（默认）| en。旧配置文件没有这个字段时按默认值补齐。
+    #[serde(default = "default_lang")]
+    lang: String,
+}
+
+fn default_lang() -> String {
+    "zh".to_string()
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             temp_dir: std::env::temp_dir()
-                .join("file-paste-float")
+                .join("desktop-pet-tool")
                 .to_string_lossy()
                 .into_owned(),
             always_on_top: true,
@@ -59,6 +67,7 @@ impl Default for Config {
             auto_start: true,
             // 点击悬浮球右上角关闭按钮时，默认最小化到系统托盘（而非直接退出）
             close_to_tray: true,
+            lang: default_lang(),
         }
     }
 }
@@ -79,7 +88,34 @@ struct AppState {
     visible_height: AtomicI32,
     drag_origin: Mutex<Option<(i32, i32, i32, i32)>>, // (start_cursor_x, start_cursor_y, win_x, win_y)
     menu: Mutex<Option<Menu<tauri::Wry>>>,
+    /// 托盘菜单里各项的句柄。切换语言时只改文字（set_text），不重建菜单：
+    /// Windows 上运行时 `tray.set_menu()` 会让主线程等消息泵，实测会把界面卡死。
+    menu_items: Mutex<Option<MenuHandles>>,
     tray: Mutex<Option<TrayIcon<tauri::Wry>>>,
+}
+
+/// 托盘菜单各项的句柄，用于就地改文案
+struct MenuHandles {
+    paste: MenuItem<tauri::Wry>,
+    docs: MenuItem<tauri::Wry>,
+    open: MenuItem<tauri::Wry>,
+    clean: MenuItem<tauri::Wry>,
+    settings: MenuItem<tauri::Wry>,
+    autostart: CheckMenuItem<tauri::Wry>,
+    quit: MenuItem<tauri::Wry>,
+}
+
+impl MenuHandles {
+    /// 按当前语言刷新七项文案。只调用 Win32 的菜单项文本更新，不触碰托盘宿主。
+    fn apply_lang(&self) {
+        let _ = self.paste.set_text(i18n::t("文档复制", "Copy documents"));
+        let _ = self.docs.set_text(i18n::t("文档工具", "Document tools"));
+        let _ = self.open.set_text(i18n::t("打开临时文件夹", "Open temp folder"));
+        let _ = self.clean.set_text(i18n::t("清理临时文件夹", "Clean temp folder"));
+        let _ = self.settings.set_text(i18n::t("设置", "Settings"));
+        let _ = self.autostart.set_text(i18n::t("开机自启动", "Launch at login"));
+        let _ = self.quit.set_text(i18n::t("退出", "Quit"));
+    }
 }
 
 fn config_path(app: &AppHandle) -> std::path::PathBuf {
@@ -229,22 +265,47 @@ fn config_set(
     state: State<AppState>,
     new_cfg: serde_json::Value,
 ) -> Result<Config, String> {
-    let mut cfg = state.config.lock().unwrap();
-    let mut merged = serde_json::to_value(&*cfg).map_err(|e| e.to_string())?;
-    if let (Some(m), Some(n)) = (merged.as_object_mut(), new_cfg.as_object()) {
-        for (k, v) in n {
-            m.insert(k.clone(), v.clone());
+    // 配置锁只在读写这一段持有：后面刷新菜单/托盘时如果还握着它，
+    // 而那段代码又需要配置，就会在同一线程上把不可重入的 Mutex 锁死。
+    let cfg = {
+        let mut guard = state.config.lock().unwrap();
+        let mut merged = serde_json::to_value(&*guard).map_err(|e| e.to_string())?;
+        if let (Some(m), Some(n)) = (merged.as_object_mut(), new_cfg.as_object()) {
+            for (k, v) in n {
+                m.insert(k.clone(), v.clone());
+            }
+        }
+        *guard = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+        save_config(&app, &guard);
+        guard.clone()
+    }; // 锁在这里释放
+
+    // 语言：主进程侧（菜单/托盘/对话框）与前端同时切换
+    let lang_changed = {
+        let current = i18n::is_en();
+        i18n::set_from_code(&cfg.lang);
+        current != i18n::is_en()
+    };
+    if lang_changed {
+        // 托盘菜单只就地改文案，绝不重建/替换：Windows 上运行时 tray.set_menu()
+        // 会让主线程等消息泵，实测直接把应用卡死（右键菜单是点击时新建的，不受影响）。
+        if let Some(items) = state.menu_items.lock().unwrap().as_ref() {
+            items.apply_lang();
+        }
+        for label in ["main", "settings"] {
+            if let Some(w) = app.get_webview_window(label) {
+                let _ = w.emit("config-changed", serde_json::json!({ "lang": cfg.lang }));
+            }
         }
     }
-    *cfg = serde_json::from_value(merged).map_err(|e| e.to_string())?;
-    save_config(&app, &cfg);
+
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.set_always_on_top(cfg.always_on_top);
     }
     if let Some(tray) = state.tray.lock().unwrap().as_ref() {
         let _ = tray.set_visible(cfg.close_to_tray);
     }
-    Ok(cfg.clone())
+    Ok(cfg)
 }
 
 #[tauri::command]
@@ -256,7 +317,7 @@ async fn config_pick_temp_dir(
     let picked = app
         .dialog()
         .file()
-        .set_title("选择临时文件存放目录")
+        .set_title(i18n::t("选择临时文件存放目录", "Choose a temp folder"))
         .set_directory(&current)
         .blocking_pick_folder();
     if let Some(p) = picked {
@@ -339,7 +400,8 @@ fn open_context_menu(window: tauri::WebviewWindow) {
     // 不要复用托盘菜单实例：Windows 上一个原生菜单只能属于一个宿主，
     // 托盘菜单与窗口弹出菜单共用同一个 Menu 会导致托盘右键菜单异常。
     let app = window.app_handle();
-    if let Ok(menu) = build_menu(app) {
+    let cfg = app.state::<AppState>().config.lock().unwrap().clone();
+    if let Ok((menu, _)) = build_menu(app, &cfg) {
         let _ = window.popup_menu(&menu);
     }
 }
@@ -480,24 +542,40 @@ fn open_docs(app: &AppHandle, paths: Option<Vec<String>>) {
 }
 
 // ============== 菜单 ==============
-fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let cfg = app.state::<AppState>().config.lock().unwrap().clone();
+/// 构建右键菜单 / 托盘菜单，并把各项句柄一起返回（句柄用于切语言时就地改文字）。
+/// 刻意把配置作为参数传入而不是在这里 `state.config.lock()`：切换语言会从 `config_set`
+/// 触发菜单文案刷新，若这里再去取同一把不可重入的 `Mutex`，就会自锁。
+fn build_menu(
+    app: &AppHandle,
+    cfg: &Config,
+) -> tauri::Result<(Menu<tauri::Wry>, MenuHandles)> {
     // 分区一：文档相关
-    let paste = MenuItemBuilder::with_id("paste", "文档复制").build(app)?;
-    let docs = MenuItemBuilder::with_id("docs", "文档工具").build(app)?;
+    let paste = MenuItemBuilder::with_id("paste", i18n::t("文档复制", "Copy documents")).build(app)?;
+    let docs = MenuItemBuilder::with_id("docs", i18n::t("文档工具", "Document tools")).build(app)?;
     // 分区二：临时文件夹与程序设置
-    let open = MenuItemBuilder::with_id("open", "打开临时文件夹").build(app)?;
-    let clean = MenuItemBuilder::with_id("clean", "清理临时文件夹").build(app)?;
-    let settings = MenuItemBuilder::with_id("settings", "设置").build(app)?;
-    let autostart = CheckMenuItemBuilder::with_id("autostart", "开机自启动")
+    let open = MenuItemBuilder::with_id("open", i18n::t("打开临时文件夹", "Open temp folder")).build(app)?;
+    let clean =
+        MenuItemBuilder::with_id("clean", i18n::t("清理临时文件夹", "Clean temp folder")).build(app)?;
+    let settings = MenuItemBuilder::with_id("settings", i18n::t("设置", "Settings")).build(app)?;
+    let autostart = CheckMenuItemBuilder::with_id("autostart", i18n::t("开机自启动", "Launch at login"))
         .checked(cfg.auto_start)
         .build(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
-    MenuBuilder::new(app)
+    let quit = MenuItemBuilder::with_id("quit", i18n::t("退出", "Quit")).build(app)?;
+    let menu = MenuBuilder::new(app)
         .items(&[&paste, &docs])
         .separator()
         .items(&[&open, &clean, &settings, &autostart, &quit])
-        .build()
+        .build()?;
+    let handles = MenuHandles {
+        paste,
+        docs,
+        open,
+        clean,
+        settings,
+        autostart,
+        quit,
+    };
+    Ok((menu, handles))
 }
 
 fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
@@ -529,10 +607,14 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
             })();
             match result {
                 Ok(_) => {
-                    let _ = app.emit_to("main", "float-toast", "临时文件夹已清理");
+                    let _ = app.emit_to("main", "float-toast", i18n::t("临时文件夹已清理", "Temp folder cleaned"));
                 }
                 Err(e) => {
-                    let _ = app.emit_to("main", "float-toast", format!("清理失败: {}", e));
+                    let _ = app.emit_to(
+                        "main",
+                        "float-toast",
+                        format!("{}{}", i18n::t("清理失败: ", "Clean failed: "), e),
+                    );
                 }
             }
         }
@@ -700,11 +782,14 @@ pub fn run() {
             visible_height: AtomicI32::new(112),
             drag_origin: Mutex::new(None),
             menu: Mutex::new(None),
+            menu_items: Mutex::new(None),
             tray: Mutex::new(None),
         })
         .manage(docs::DocsState::default())
         .setup(|app| {
             let cfg = load_config(app.handle());
+            // 主进程侧文案（菜单/托盘/对话框）跟随配置里的语言
+            i18n::set_from_code(&cfg.lang);
             {
                 let state = app.state::<AppState>();
                 *state.config.lock().unwrap() = cfg.clone();
@@ -714,10 +799,11 @@ pub fn run() {
                 let _ = app.autolaunch().enable();
             }
 
-            let menu = build_menu(app.handle())?;
+            let (menu, menu_items) = build_menu(app.handle(), &cfg)?;
             {
                 let state = app.state::<AppState>();
                 *state.menu.lock().unwrap() = Some(menu.clone());
+                *state.menu_items.lock().unwrap() = Some(menu_items);
             }
 
             // 托盘
@@ -779,6 +865,7 @@ pub fn run() {
             app.on_menu_event(|app_handle, event| handle_menu_event(app_handle, event));
 
             start_global_tracking(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -9,13 +9,13 @@
   <!-- 输入气泡：对话冒泡形式，在主体上方弹出，主体不被遮盖 -->
   <div id="bubble" class="bubble hidden">
     <div class="bubble-header">
-      <span class="bubble-title">粘贴文件链接</span>
-      <button id="bubbleClose" class="bubble-close" title="收起">×</button>
+      <span class="bubble-title" data-i18n="input.title">粘贴文件链接</span>
+      <button id="bubbleClose" class="bubble-close" data-i18n-title="common.hide" title="收起">×</button>
     </div>
     <input type="text" id="urlInput" class="url-input" placeholder="https://example.com/file.pdf" autocomplete="off" spellcheck="false">
     <div id="progressWrap" class="progress-wrap hidden">
       <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
-      <div id="progressText" class="progress-text">准备中…</div>
+      <div id="progressText" class="progress-text" data-i18n="input.prepare">准备中…</div>
     </div>
     <div id="statusText" class="status-text"></div>
   </div>
@@ -23,35 +23,35 @@
   <!-- 文档工具气泡：拖入文件后浮出，转换 / 压缩 → 选项 → 进度 → 完成，全在球边完成 -->
   <div id="docsBubble" class="bubble docs-bubble hidden">
     <div class="bubble-header">
-      <span id="docsTitle" class="bubble-title">文档工具</span>
-      <button id="docsClose" class="bubble-close" title="收起">×</button>
+      <span id="docsTitle" class="bubble-title" data-i18n="docs.title">文档工具</span>
+      <button id="docsClose" class="bubble-close" data-i18n-title="common.hide" title="收起">×</button>
     </div>
     <div id="docsBody">
       <div id="docsFiles" class="docs-files"></div>
 
       <div id="docsModes" class="docs-modes">
         <button id="docsModeConvert" class="mode-card">
-          <span class="mode-name">转换</span>
-          <span class="mode-sub">换成别的格式</span>
+          <span class="mode-name" data-i18n="docs.modeConvert">转换</span>
+          <span class="mode-sub" data-i18n="docs.modeConvertSub">换成别的格式</span>
         </button>
         <button id="docsModeCompress" class="mode-card">
-          <span class="mode-name">压缩</span>
-          <span class="mode-sub">更小 / 标准 / 更清晰</span>
+          <span class="mode-name" data-i18n="docs.modeCompress">压缩</span>
+          <span class="mode-sub" data-i18n="docs.modeCompressSub">更小 / 标准 / 更清晰</span>
         </button>
       </div>
 
       <div id="docsTargets" class="chip-row hidden"></div>
       <div id="docsLevels" class="chip-row hidden">
-        <button class="chip" data-level="small">更小</button>
-        <button class="chip active" data-level="normal">标准</button>
-        <button class="chip" data-level="high">更清晰</button>
+        <button class="chip" data-level="small" data-i18n="docs.levelSmall">更小</button>
+        <button class="chip active" data-level="normal" data-i18n="docs.levelNormal">标准</button>
+        <button class="chip" data-level="high" data-i18n="docs.levelHigh">更清晰</button>
       </div>
 
       <div id="docsHint" class="docs-hint"></div>
 
       <div id="docsActions" class="docs-actions">
-        <button id="docsPick" class="link-btn">选择文件</button>
-        <button id="docsStart" class="primary-btn" disabled>开始处理</button>
+        <button id="docsPick" class="link-btn" data-i18n="docs.pick">选择文件</button>
+        <button id="docsStart" class="primary-btn" data-i18n="docs.start" disabled>开始处理</button>
       </div>
 
       <div id="docsRun" class="hidden">
@@ -62,7 +62,7 @@
           <span id="docsRunPct">0%</span>
         </div>
         <div class="docs-actions">
-          <button id="docsCancel" class="link-btn">取消</button>
+          <button id="docsCancel" class="link-btn" data-i18n="common.cancel">取消</button>
         </div>
       </div>
 
@@ -70,8 +70,8 @@
         <div id="docsDoneMsg" class="docs-done-msg"></div>
         <div id="docsResults" class="docs-results"></div>
         <div class="docs-actions">
-          <button id="docsOpenDir" class="secondary-btn">打开临时文件夹</button>
-          <button id="docsAgain" class="primary-btn">完成</button>
+          <button id="docsOpenDir" class="secondary-btn" data-i18n="docs.openDir">打开临时文件夹</button>
+          <button id="docsAgain" class="primary-btn" data-i18n="docs.again">完成</button>
         </div>
       </div>
     </div>
@@ -79,7 +79,7 @@
 
   <!-- 圆形悬浮主体：由 emotion-ball 引擎绘制球体与表情，始终显示 -->
   <div id="floatButton" class="float-button">
-    <button id="miniClose" class="mini-close" title="关闭">×</button>
+    <button id="miniClose" class="mini-close" data-i18n-title="common.close" title="关闭">×</button>
     <div id="eb-render"></div>
   </div>
 
@@ -94,6 +94,9 @@
 
   <!-- 消息提示气泡：清理完成、复制成功等（对话冒泡样式，默认隐藏） -->
   <div id="msgBubble" class="bubble msg-bubble hidden"></div>
+
+  <!-- 文案字典（中 / 英）先于业务脚本加载 -->
+  <script src="i18n.js"></script>
 
   <!-- emotion-ball 表情引擎（按依赖顺序加载：几何数据 → 表情数据 → 渲染层 → 驱动层） -->
   <script src="vendor/emotion-ball/rings.js"></script>

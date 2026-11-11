@@ -10,7 +10,6 @@
       background: #f7f6fa;
       color: #333;
     }
-    h2 { font-size: 16px; margin-bottom: 20px; color: #555; }
     .field { margin-bottom: 18px; }
     label { display: block; font-size: 12px; color: #888; margin-bottom: 6px; }
     .path-row { display: flex; gap: 8px; }
@@ -57,7 +56,7 @@
     .tip { font-size: 11px; color: #aaa; margin-top: 4px; }
     .tips {
       font-size: 12px;
-      margin-top: 52px;
+      margin-top: 24px;
     }
     .footer {
       margin-top: 24px;
@@ -79,43 +78,57 @@
 </head>
 <body>
   <div class="field">
-    <label>临时文件存放路径</label>
+    <label data-i18n="set.language">语言 / Language</label>
+    <div class="radio-row">
+      <label class="radio-item">
+        <input type="radio" name="lang" value="zh" id="langZh"> 中文
+      </label>
+      <label class="radio-item">
+        <input type="radio" name="lang" value="en" id="langEn"> English
+      </label>
+    </div>
+    <div class="tip" data-i18n="set.langTip">切换后立即生效，菜单与悬浮球气泡都会跟着换。</div>
+  </div>
+
+  <div class="field">
+    <label data-i18n="set.tempPath">临时文件存放路径</label>
     <div class="path-row">
       <input type="text" id="tempDir" readonly>
-      <button id="browseBtn">浏览</button>
+      <button id="browseBtn" data-i18n="common.browse">浏览</button>
     </div>
-    <div class="tip">生成的文件会先保存到这里，复制到剪贴板后可随时清理。</div>
+    <div class="tip" data-i18n="set.tempPathTip">生成的文件会先保存到这里，复制到剪贴板后可随时清理。</div>
   </div>
 
   <div class="field">
     <div class="checkbox-row">
       <input type="checkbox" id="alwaysOnTop">
-      <label for="alwaysOnTop" style="margin:0;">窗口始终置顶</label>
+      <label for="alwaysOnTop" style="margin:0;" data-i18n="set.alwaysOnTop">窗口始终置顶</label>
     </div>
   </div>
 
   <div class="field">
-    <label>点击悬浮球右上角关闭按钮时</label>
+    <label data-i18n="set.closeTitle">点击悬浮球右上角关闭按钮时</label>
     <div class="radio-row">
       <label class="radio-item">
-        <input type="radio" name="closeAction" value="quit" id="closeQuit"> 直接退出
+        <input type="radio" name="closeAction" value="quit" id="closeQuit"> <span data-i18n="set.closeQuit">直接退出</span>
       </label>
       <label class="radio-item">
-        <input type="radio" name="closeAction" value="tray" id="closeTray"> 最小化到系统托盘
+        <input type="radio" name="closeAction" value="tray" id="closeTray"> <span data-i18n="set.closeTray">最小化到系统托盘</span>
       </label>
     </div>
-    <div class="tip">最小化到托盘后，可从系统托盘图标点击恢复悬浮窗。</div>
+    <div class="tip" data-i18n="set.closeTip">最小化到托盘后，可从系统托盘图标点击恢复悬浮窗。</div>
   </div>
 
-  <div class="tips">
+  <div class="tips" data-i18n="set.contact">
     如遇到问题，请联系：18725926908（电话&微信）、liumengjianguge@gmail.com（邮箱）
   </div>
 
   <div class="footer">
-    <button class="btn-text" id="closeBtn">关闭</button>
-    <button class="btn-primary" id="saveBtn">保存</button>
+    <button class="btn-text" id="closeBtn" data-i18n="common.close">关闭</button>
+    <button class="btn-primary" id="saveBtn" data-i18n="common.save">保存</button>
   </div>
 
+  <script src="i18n.js"></script>
   <script>
     // Tauri 桥接层（接口保持 window.api.* 不变）
     window.api = {
@@ -130,15 +143,27 @@
     const alwaysOnTop = document.getElementById('alwaysOnTop');
     const closeQuit = document.getElementById('closeQuit');
     const closeTray = document.getElementById('closeTray');
+    const langZh = document.getElementById('langZh');
+    const langEn = document.getElementById('langEn');
     const saveBtn = document.getElementById('saveBtn');
     const closeBtn = document.getElementById('closeBtn');
 
-    // 加载当前配置
+    // 加载当前配置（语言先落定，再显示其余文案）
     window.api.getConfig().then(cfg => {
+      window.I18N.setLang(cfg.lang || 'zh');
       tempDirInput.value = cfg.tempDir;
       alwaysOnTop.checked = cfg.alwaysOnTop;
       if (cfg.closeToTray) closeTray.checked = true; else closeQuit.checked = true;
+      if (cfg.lang === 'en') langEn.checked = true; else langZh.checked = true;
     });
+
+    // 语言单独即时生效：切换即保存，其它窗口收到 config-changed 后同步换文案
+    function onLangChange(value) {
+      window.I18N.setLang(value);
+      window.api.setConfig({ lang: value });
+    }
+    langZh.addEventListener('change', () => { if (langZh.checked) onLangChange('zh'); });
+    langEn.addEventListener('change', () => { if (langEn.checked) onLangChange('en'); });
 
     browseBtn.addEventListener('click', async () => {
       const dir = await window.api.pickTempDir();

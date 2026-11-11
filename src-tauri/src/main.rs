@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    file_paste_float::run()
+    desktop_pet_tool::run()
 }

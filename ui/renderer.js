@@ -361,11 +361,11 @@ urlInput.addEventListener('keydown', async (e) => {
   if (e.key !== 'Enter' || downloading) return;
   const url = urlInput.value.trim();
   if (!url) {
-    setStatus('请输入文件链接', 'err');
+    setStatus(T('input.needUrl'), 'err');
     return;
   }
   if (!/^https?:\/\//i.test(url)) {
-    setStatus('链接需以 http:// 或 https:// 开头', 'err');
+    setStatus(T('input.badScheme'), 'err');
     return;
   }
   await doDownload(url);
@@ -384,11 +384,11 @@ window.api.onProgress(({ received, total, filename }) => {
     progressFill.style.width = pct + '%';
     const mb = (received / 1024 / 1024).toFixed(1);
     const totalMb = (total / 1024 / 1024).toFixed(1);
-    progressText.textContent = `下载中 ${pct}%  (${mb} / ${totalMb} MB)`;
+    progressText.textContent = T('input.downloading', { pct, mb, total: totalMb });
   } else {
     progressFill.style.width = '80%';
     const mb = (received / 1024 / 1024).toFixed(1);
-    progressText.textContent = `已下载 ${mb} MB — ${filename}`;
+    progressText.textContent = T('input.downloaded', { mb, name: filename });
   }
 });
 
@@ -396,7 +396,7 @@ async function doDownload(url) {
   downloading = true;
   progressWrap.classList.remove('hidden');
   progressFill.style.width = '0%';
-  progressText.textContent = '连接中…';
+  progressText.textContent = T('input.connecting');
   setStatus('');
 
   const result = await window.api.startDownload(url);
@@ -404,7 +404,7 @@ async function doDownload(url) {
 
   if (result.ok) {
     progressFill.style.width = '100%';
-    progressText.textContent = '完成';
+    progressText.textContent = T('input.done');
     if (result.copiedToClipboard) {
       setStatus('', 'ok');
       showMood('10'); // 开心
@@ -417,11 +417,11 @@ async function doDownload(url) {
           progressWrap.classList.add('hidden');
           statusText.textContent = '';
           statusText.className = 'status-text';
-          showMsg('已复制，直接粘贴');
+          showMsg(T('input.okCopied'));
         }
       }, 1000);
     } else {
-      setStatus('✓ 已下载（剪贴板复制受限）', 'ok');
+      setStatus(T('input.okNoClip'), 'ok');
       showMood('10'); // 开心
       setTimeout(() => {
         if (!downloading) {
@@ -431,7 +431,7 @@ async function doDownload(url) {
           progressWrap.classList.add('hidden');
           statusText.textContent = '';
           statusText.className = 'status-text';
-          showMsg('已下载（路径已复制为文本）');
+          showMsg(T('input.okPathText'));
         }
       }, 1000);
     }
@@ -460,6 +460,36 @@ resetIdleTimer();
 // 不再打开独立窗口：后端只把文件入队并发 docs-staged，气泡与按钮都在球边。
 
 const invoke = window.__TAURI__.core.invoke;
+
+// ===== 语言（默认中文，设置页切换后立即推送） =====
+const T = (key, vars) => window.I18N.t(key, vars);
+
+function applyLang(lang) {
+  const next = lang === 'en' ? 'en' : 'zh';
+  if (window.I18N.lang === next) return;
+  window.I18N.setLang(next);
+  if (docs.open) { renderDocs(); docsLayout(); }
+}
+
+async function loadLangFromConfig() {
+  let lang = 'zh';
+  try {
+    const cfg = await invoke('config_get');
+    if (cfg && cfg.lang) lang = cfg.lang;
+  } catch (err) {
+    console.error('读取语言配置失败', err);
+  }
+  window.I18N.setLang(lang);
+  if (docs.open) { renderDocs(); docsLayout(); }
+}
+
+try {
+  window.__TAURI__.event.listen('config-changed', (e) => {
+    applyLang(e.payload && e.payload.lang);
+  });
+} catch (err) {
+  console.error('语言切换监听注册失败', err);
+}
 
 const docsBubble = document.getElementById('docsBubble');
 const docsTitle = document.getElementById('docsTitle');
@@ -495,13 +525,27 @@ const DOCS_MAX_H = 508;      // 主窗口 620，扣掉气泡 100px 底部偏移�
 const RING_LEN = 289;        // 2πr，r=46
 
 const KIND_LABEL = {
-  image: '图片',
-  word: 'Word',
-  sheet: '表格',
-  slides: '幻灯片',
-  pdf: 'PDF',
-  other: '不支持',
+  image: 'kind.image',
+  word: 'kind.word',
+  sheet: 'kind.sheet',
+  slides: 'kind.slides',
+  pdf: 'kind.pdf',
+  text: 'kind.text',
+  markdown: 'kind.markdown',
+  html: 'kind.html',
+  csv: 'kind.csv',
+  rtf: 'kind.rtf',
+  odf: 'kind.odf',
+  epub: 'kind.epub',
+  other: 'kind.other',
 };
+
+function kindLabel(kind) {
+  const key = KIND_LABEL[kind];
+  if (!key) return kind || '';
+  const label = T(key);
+  return label === key ? kind : label;
+}
 
 const docs = {
   open: false,
@@ -569,7 +613,7 @@ function renderDocsFiles() {
   if (!docs.files.length) {
     const empty = document.createElement('div');
     empty.className = 'docs-empty';
-    empty.textContent = '把文件拖到悬浮球上，或点下面「选择文件」';
+    empty.textContent = T('docs.empty');
     docsFiles.appendChild(empty);
     return;
   }
@@ -580,7 +624,7 @@ function renderDocsFiles() {
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = f.name;
-    name.title = `${f.path} · ${KIND_LABEL[f.kind] || f.kind}`;
+    name.title = `${f.path} · ${kindLabel(f.kind) || f.kind}`;
 
     const size = document.createElement('span');
     size.className = 'size';
@@ -589,7 +633,7 @@ function renderDocsFiles() {
     const remove = document.createElement('button');
     remove.className = 'remove';
     remove.textContent = '×';
-    remove.title = '移出列表';
+    remove.title = T('docs.remove');
     remove.addEventListener('click', (e) => {
       e.stopPropagation();
       if (docs.running) return;
@@ -641,38 +685,43 @@ function renderDocsTargets() {
 
 function syncDocsControls() {
   const hasFiles = docs.files.length > 0;
-  docsPick.textContent = hasFiles ? '继续添加' : '选择文件';
+  docsPick.textContent = hasFiles ? T('docs.pickMore') : T('docs.pick');
 
   if (docs.stage === 'options' && docs.mode === 'convert') {
     const targets = docsTargetsFor(docs.files);
     docsStart.disabled = !(hasFiles && targets.length && docs.target);
     if (!hasFiles) {
-      docsHint.textContent = '先添加文件';
+      docsHint.textContent = T('docs.hintAddFirst');
     } else if (!targets.length) {
       const first = docs.files.find((f) => !f.targets || !f.targets.length);
       docsHint.textContent = first
-        ? `${first.name}：当前版本没有可用的目标格式`
-        : '所选文件在当前版本没有可用的目标格式';
+        ? T('docs.hintNoTargetOne', { name: first.name })
+        : T('docs.hintNoTarget');
     } else {
-      docsHint.textContent = docs.target ? `将转换为 ${docs.target.toUpperCase()}` : '选一个目标格式';
+      docsHint.textContent = docs.target
+        ? T('docs.hintWillConvert', { fmt: docs.target.toUpperCase() })
+        : T('docs.hintPickTarget');
     }
   } else if (docs.stage === 'options' && docs.mode === 'compress') {
     const ok = docsCompressible();
     docsStart.disabled = !(hasFiles && ok.length);
     if (!hasFiles) {
-      docsHint.textContent = '先添加文件';
+      docsHint.textContent = T('docs.hintAddFirst');
     } else if (!ok.length) {
       const first = docs.files[0];
-      docsHint.textContent = first ? first.compressHint : '这些文件不支持压缩';
+      docsHint.textContent = first ? first.compressHint : T('docs.hintNoCompress');
     } else {
       const skip = docs.files.length - ok.length;
+      const levelName = docs.level === 'small'
+        ? T('docs.levelSmall')
+        : docs.level === 'high' ? T('docs.levelHigh') : T('docs.levelNormal');
       docsHint.textContent = skip > 0
-        ? `${ok.length} 个文件可压缩，${skip} 个不支持压缩（会跳过）`
-        : `按「${docs.level === 'small' ? '更小' : docs.level === 'high' ? '更清晰' : '标准'}」档压缩`;
+        ? T('docs.hintCompressSkip', { ok: ok.length, skip })
+        : T('docs.hintCompressLevel', { level: levelName });
     }
   } else {
     docsStart.disabled = !hasFiles;
-    docsHint.textContent = hasFiles ? '选一个动作：转换 或 压缩' : '把文件拖到悬浮球上，或点下面「选择文件」';
+    docsHint.textContent = hasFiles ? T('docs.hintPickMode') : T('docs.empty');
   }
 }
 
@@ -696,8 +745,8 @@ function renderDocs() {
   if (showChoices) syncDocsControls();
 
   docsTitle.textContent = docs.files.length
-    ? `文档工具 · ${docs.files.length} 个文件`
-    : '文档工具';
+    ? T(docs.files.length === 1 ? 'docs.titleCountOne' : 'docs.titleCount', { n: docs.files.length })
+    : T('docs.title');
 }
 
 // ---------- 交互 ----------
@@ -755,7 +804,7 @@ async function pickDocs() {
     renderDocs();
     await docsLayout();
   } catch (err) {
-    docsHint.textContent = `选择文件失败：${err}`;
+    docsHint.textContent = T('docs.pickFailed', { err });
     docs.open = true;
     renderDocs();
     await docsLayout();
@@ -790,7 +839,7 @@ async function startDocsJob() {
   docs.stage = 'running';
   docs.outputs = [];
   docsRunName.textContent = docs.files[0] ? docs.files[0].name : '';
-  docsRunLabel.textContent = `${docs.files.length} 个文件`;
+  docsRunLabel.textContent = T('docs.fileCount', { n: docs.files.length });
   docsRunPct.textContent = '0%';
   docsRunFill.style.width = '0%';
   renderDocs();
@@ -835,9 +884,9 @@ function onDocsDone(payload) {
   // 用户中途收了气泡：只在球边提示一句，不强行弹回面板
   if (!docs.open) {
     if (payload && payload.ok) {
-      showMsg(`已完成 ${docs.outputs.length} 个文件`, 2600);
+      showMsg(T('docs.doneToast', { n: docs.outputs.length }), 2600);
     } else {
-      showMsg('处理失败', 2600);
+      showMsg(T('docs.failedToast'), 2600);
     }
     docs.files = [];
     return;
@@ -858,7 +907,9 @@ function onDocsDone(payload) {
 
     const delta = document.createElement('span');
     delta.className = 'delta';
-    delta.textContent = item.note ? `${item.before} → ${item.after}（${item.note}）` : item.after;
+    delta.textContent = item.note
+      ? `${item.before} → ${item.after}${window.I18N.isEn() ? ` (${item.note})` : `（${item.note}）`}`
+      : item.after;
     if (item.note) delta.style.color = '#3a9d5d';
 
     row.append(name, delta);
@@ -874,7 +925,7 @@ docsStart.addEventListener('click', (e) => { e.stopPropagation(); startDocsJob()
 docsCancel.addEventListener('click', (e) => {
   e.stopPropagation();
   invoke('docs_cancel').catch(() => {});
-  docsRunLabel.textContent = '正在取消…';
+  docsRunLabel.textContent = T('docs.canceling');
 });
 docsOpenDir.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -972,5 +1023,8 @@ window.__TAURI__.event.listen('docs-mood', (e) => {
     resetIdleTimer();
   }
 });
+
+// 所有函数声明完成后按配置落定界面语言（默认中文）
+loadLangFromConfig();
 
 

@@ -31,6 +31,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2GB 硬上限
 
+/// 文档任务的中英文案：跟随主进程当前语言（设置页切换后立即生效）
+fn tr(zh: &str, en: &str) -> String {
+    crate::i18n::t(zh, en)
+}
+
 #[derive(Default)]
 pub struct DocsState {
     pub pending: Mutex<Vec<String>>,
@@ -81,28 +86,34 @@ fn classify(path: &Path) -> FileInfo {
         .unwrap_or_default();
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
-    let (kind, can_compress, compress_hint, targets): (&str, bool, &str, Vec<&str>) = match ext
+    let (kind, can_compress, compress_hint, targets): (&str, bool, String, Vec<&str>) = match ext
         .as_str()
     {
-        "png" | "jpg" | "jpeg" | "bmp" | "gif" | "tif" | "tiff" | "webp" => {
-            ("image", true, "降低分辨率与重新编码", vec!["jpg", "png", "bmp", "tif", "pdf"])
-        }
+        "png" | "jpg" | "jpeg" | "bmp" | "gif" | "tif" | "tiff" | "webp" => (
+            "image",
+            true,
+            tr("降低分辨率与重新编码", "Resample and re-encode"),
+            vec!["jpg", "png", "bmp", "tif", "pdf"],
+        ),
         "docx" => (
             "word",
             true,
-            "重打包并压缩内嵌图片",
+            tr("重打包并压缩内嵌图片", "Repack and compress embedded images"),
             vec!["txt", "html", "md", "pdf"],
         ),
         "doc" => (
             "word",
             false,
-            "旧版 .doc 可直接转换，不支持压缩（转成 .docx 后可再压缩）",
+            tr(
+                "旧版 .doc 可直接转换，不支持压缩（转成 .docx 后可再压缩）",
+                "Legacy .doc can be converted but not compressed (convert to .docx first)",
+            ),
             vec!["txt", "md", "html", "docx", "pdf"],
         ),
         "rtf" => (
             "rtf",
             false,
-            "富文本文档，可转成常见格式",
+            tr("富文本文档，可转成常见格式", "Rich text document, convert to common formats"),
             vec!["txt", "md", "html", "docx", "pdf"],
         ),
         "odt" | "ods" | "odp" => {
@@ -116,44 +127,79 @@ fn classify(path: &Path) -> FileInfo {
                 targets.push("md");
             }
             targets.extend(extra);
-            (kind, false, "开放文档格式，可转成常见格式", targets)
+            (
+                kind,
+                false,
+                tr("开放文档格式，可转成常见格式", "OpenDocument, convert to common formats"),
+                targets,
+            )
         }
         "epub" => (
             "epub",
             false,
-            "电子书，可转成常见格式",
+            tr("电子书，可转成常见格式", "E-book, convert to common formats"),
             vec!["txt", "md", "html", "docx", "pdf"],
         ),
         "xlsx" => (
             "sheet",
             true,
-            "重打包并压缩内嵌图片",
+            tr("重打包并压缩内嵌图片", "Repack and compress embedded images"),
             vec!["csv", "txt", "html", "pdf"],
         ),
-        "xls" => ("sheet", false, "旧版 .xls 暂不支持", vec![]),
+        "xls" => (
+            "sheet",
+            false,
+            tr("旧版 .xls 暂不支持", "Legacy .xls is not supported yet"),
+            vec![],
+        ),
         "pptx" => (
             "slides",
             true,
-            "重打包并压缩内嵌图片",
+            tr("重打包并压缩内嵌图片", "Repack and compress embedded images"),
             vec!["txt", "html", "md", "pdf"],
         ),
-        "ppt" => ("slides", false, "旧版 .ppt 暂不支持", vec![]),
+        "ppt" => (
+            "slides",
+            false,
+            tr("旧版 .ppt 暂不支持", "Legacy .ppt is not supported yet"),
+            vec![],
+        ),
         "pdf" => (
             "pdf",
             true,
-            "剥离私有数据 + 图片重采样",
+            tr("剥离私有数据 + 图片重采样", "Strip private data and resample images"),
             vec!["txt", "md", "html", "docx", "xlsx", "pptx", "jpg", "png"],
         ),
-        "txt" => ("text", false, "纯文本无需压缩", vec!["docx", "html", "pdf"]),
+        "txt" => (
+            "text",
+            false,
+            tr("纯文本无需压缩", "Plain text, nothing to compress"),
+            vec!["docx", "html", "pdf"],
+        ),
         "md" => (
             "markdown",
             false,
-            "纯文本无需压缩",
+            tr("纯文本无需压缩", "Plain text, nothing to compress"),
             vec!["docx", "html", "txt", "pdf"],
         ),
-        "html" | "htm" => ("html", false, "网页文件无需压缩", vec!["txt", "md", "pdf"]),
-        "csv" => ("csv", false, "CSV 无需压缩", vec!["xlsx", "txt", "html", "pdf"]),
-        _ => ("other", false, "该类型暂不支持", vec![]),
+        "html" | "htm" => (
+            "html",
+            false,
+            tr("网页文件无需压缩", "HTML file, nothing to compress"),
+            vec!["txt", "md", "pdf"],
+        ),
+        "csv" => (
+            "csv",
+            false,
+            tr("CSV 无需压缩", "CSV file, nothing to compress"),
+            vec!["xlsx", "txt", "html", "pdf"],
+        ),
+        _ => (
+            "other",
+            false,
+            tr("该类型暂不支持", "This file type is not supported"),
+            vec![],
+        ),
     };
 
     FileInfo {
@@ -163,7 +209,7 @@ fn classify(path: &Path) -> FileInfo {
         size_label: human_size(size),
         kind: kind.to_string(),
         can_compress,
-        compress_hint: compress_hint.to_string(),
+        compress_hint,
         targets: targets.into_iter().map(|s| s.to_string()).collect(),
     }
 }
@@ -212,13 +258,14 @@ pub async fn docs_pick_files(app: AppHandle) -> Result<Vec<String>, String> {
         app.dialog()
             .file()
             .add_filter(
-                "文档与图片",
+                tr("文档与图片", "Documents and images").as_str(),
                 &[
                     "pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "rtf", "odt", "ods",
                     "odp", "epub", "csv", "txt", "md", "html", "htm", "png", "jpg", "jpeg",
                     "bmp", "gif", "tif", "tiff", "webp",
                 ],
             )
+            .set_title(tr("选择要处理的文件", "Choose files to process"))
             .blocking_pick_files()
     })
     .await
@@ -312,7 +359,7 @@ fn emit_mood(app: &AppHandle, mood: &str) {
 #[tauri::command]
 pub async fn docs_start(app: AppHandle, state: State<'_, DocsState>, job: JobRequest) -> Result<(), String> {
     if state.running.swap(true, Ordering::SeqCst) {
-        return Err("已有任务在进行中".to_string());
+        return Err(tr("已有任务在进行中", "A task is already running"));
     }
     state.cancel.store(false, Ordering::SeqCst);
     emit_mood(&app, "busy");
@@ -337,7 +384,7 @@ pub async fn docs_start(app: AppHandle, state: State<'_, DocsState>, job: JobReq
             },
             Err(_) => DonePayload {
                 ok: false,
-                message: "处理失败：解析文件时出现异常".to_string(),
+                message: tr("处理失败：解析文件时出现异常", "Failed: the file parser threw an error"),
                 outdir: outdir.to_string_lossy().to_string(),
                 outputs: Vec::new(),
             },
@@ -368,12 +415,12 @@ pub fn docs_open_outdir(app: AppHandle) -> Result<(), String> {
         std::process::Command::new("explorer")
             .arg(&path)
             .spawn()
-            .map_err(|e| format!("打开目录失败: {}", e))?;
+            .map_err(|e| format!("{}{}", tr("打开目录失败: ", "Failed to open the folder: "), e))?;
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = path;
-        return Err("仅支持 Windows".to_string());
+        return Err(tr("仅支持 Windows", "Windows only"));
     }
     Ok(())
 }
@@ -386,18 +433,26 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
     for (index, raw) in job.paths.iter().enumerate() {
         let st = app.state::<DocsState>();
         if st.cancel.load(Ordering::SeqCst) {
-            failures.push("任务已取消".to_string());
+            failures.push(tr("任务已取消", "Task cancelled"));
             break;
         }
         let src = Path::new(raw);
         let info = classify(src);
         let name = info.name.clone();
         if info.size > MAX_FILE_BYTES {
-            failures.push(format!("{} 超过 2GB 上限", name));
+            failures.push(format!(
+                "{} {}",
+                name,
+                tr("超过 2GB 上限", "exceeds the 2 GB limit")
+            ));
             continue;
         }
         if info.size == 0 {
-            failures.push(format!("{} 无法读取或为空", name));
+            failures.push(format!(
+                "{} {}",
+                name,
+                tr("无法读取或为空", "cannot be read or is empty")
+            ));
             continue;
         }
 
@@ -410,8 +465,9 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
         let target = job.target.clone().unwrap_or_default();
 
         // 决定目标文件名
+        let compress_suffix = tr("_压缩", "_compressed");
         let (suffix, mut out_ext) = if job.mode == "compress" {
-            ("_压缩", ext_of(src))
+            (compress_suffix.as_str(), ext_of(src))
         } else {
             ("", target.clone())
         };
@@ -424,7 +480,11 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
             out_ext = "zip".to_string();
         }
         if job.mode == "convert" && target.is_empty() {
-            failures.push(format!("{} 未选择目标格式", name));
+            failures.push(format!(
+                "{} {}",
+                name,
+                tr("未选择目标格式", "has no target format selected")
+            ));
             continue;
         }
         let dst = unique_path(outdir, &stem, suffix, &format!(".{}", out_ext));
@@ -437,8 +497,10 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
         if job.mode == "convert" {
             if !info.targets.iter().any(|t| t == &target) {
                 failures.push(format!(
-                    "{} → {}：当前版本不支持该格式对",
-                    name, target
+                    "{} → {}: {}",
+                    name,
+                    target,
+                    tr("当前版本不支持该格式对", "this format pair is not supported yet")
                 ));
                 continue;
             }
@@ -477,9 +539,9 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
                 total,
                 percent: overall(0.0),
                 label: if job.mode == "compress" {
-                    "开始压缩".to_string()
+                    tr("开始压缩", "Compressing")
                 } else {
-                    "开始转换".to_string()
+                    tr("开始转换", "Converting")
                 },
                 name: name.clone(),
             },
@@ -509,21 +571,21 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
                 "html" => text_ops::docx_to_html(src, &dst, &cancelled),
                 "md" => text_ops::docx_to_md(src, &dst, &cancelled),
                 "pdf" => to_pdf::convert("word", src, &dst, &cancelled).map(|_| ()),
-                _ => Err(format!("docx → {}：暂不支持", target)),
+                _ => Err(format!("{} → {}: {}", "docx", target, tr("暂不支持", "not supported"))),
             },
             ("convert", "sheet") => match target.as_str() {
                 "csv" => text_ops::xlsx_to_csv(src, &dst, &cancelled),
                 "txt" => text_ops::xlsx_to_txt(src, &dst, &cancelled),
                 "html" => text_ops::xlsx_to_html(src, &dst, &cancelled),
                 "pdf" => to_pdf::convert("sheet", src, &dst, &cancelled).map(|_| ()),
-                _ => Err(format!("xlsx → {}：暂不支持", target)),
+                _ => Err(format!("{} → {}: {}", "xlsx", target, tr("暂不支持", "not supported"))),
             },
             ("convert", "slides") => match target.as_str() {
                 "txt" => text_ops::pptx_to_txt(src, &dst, &cancelled),
                 "html" => text_ops::pptx_to_html(src, &dst, &cancelled),
                 "md" => text_ops::pptx_to_md(src, &dst, &cancelled),
                 "pdf" => to_pdf::convert("slides", src, &dst, &cancelled).map(|_| ()),
-                _ => Err(format!("pptx → {}：暂不支持", target)),
+                _ => Err(format!("{} → {}: {}", "pptx", target, tr("暂不支持", "not supported"))),
             },
             ("convert", "pdf") => match target.as_str() {
                 "txt" => from_pdf::to_txt(src, &dst, &cancelled),
@@ -535,13 +597,13 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
                 "jpg" | "png" => {
                     from_pdf::to_image(src, &dst, &target, 150.0, &cancelled, &mut extra_note)
                 }
-                _ => Err(format!("pdf → {}：暂不支持", target)),
+                _ => Err(format!("{} → {}: {}", "pdf", target, tr("暂不支持", "not supported"))),
             },
             ("convert", "text") => match target.as_str() {
                 "docx" => office_write::text_to_docx(src, &dst, false, &cancelled),
                 "html" => text_ops::txt_to_html(src, &dst, &cancelled),
                 "pdf" => to_pdf::convert("text", src, &dst, &cancelled).map(|_| ()),
-                _ => Err(format!("txt → {}：暂不支持", target)),
+                _ => Err(format!("{} → {}: {}", "txt", target, tr("暂不支持", "not supported"))),
             },
             ("convert", "markdown") => match target.as_str() {
                 "docx" => office_write::text_to_docx(src, &dst, true, &cancelled),
@@ -549,17 +611,17 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
                 "pdf" => to_pdf::convert("markdown", src, &dst, &cancelled).map(|_| ()),
                 "txt" => {
                     let md = std::fs::read_to_string(src)
-                        .map_err(|e| format!("读取失败: {}", e))?;
+                        .map_err(|e| format!("{}{}", tr("读取失败: ", "Read failed: "), e))?;
                     std::fs::write(&dst, text_ops::md_to_plain(&md))
-                        .map_err(|e| format!("写入失败: {}", e))
+                        .map_err(|e| format!("{}{}", tr("写入失败: ", "Write failed: "), e))
                 }
-                _ => Err(format!("md → {}：暂不支持", target)),
+                _ => Err(format!("{} → {}: {}", "md", target, tr("暂不支持", "not supported"))),
             },
             ("convert", "html") => match target.as_str() {
                 "txt" => text_ops::html_to_txt(src, &dst, &cancelled),
                 "md" => text_ops::html_to_md(src, &dst, &cancelled),
                 "pdf" => to_pdf::convert("html", src, &dst, &cancelled).map(|_| ()),
-                _ => Err(format!("html → {}：暂不支持", target)),
+                _ => Err(format!("{} → {}: {}", "html", target, tr("暂不支持", "not supported"))),
             },
             ("convert", "rtf") | ("convert", "odf") | ("convert", "epub") => {
                 let ext = ext_of(src);
@@ -570,17 +632,17 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
                 "xlsx" => office_write::csv_to_xlsx(src, &dst, &cancelled),
                 "pdf" => to_pdf::convert("csv", src, &dst, &cancelled).map(|_| ()),
                 "txt" => {
-                    let raw = std::fs::read(src).map_err(|e| format!("读取失败: {}", e))?;
+                    let raw = std::fs::read(src).map_err(|e| format!("{}{}", tr("读取失败: ", "Read failed: "), e))?;
                     let content = if raw.starts_with(&[0xEF, 0xBB, 0xBF]) {
                         String::from_utf8_lossy(&raw[3..]).to_string()
                     } else {
                         String::from_utf8_lossy(&raw).to_string()
                     };
                     std::fs::write(&dst, content.replace("\r\n", "\n"))
-                        .map_err(|e| format!("写入失败: {}", e))
+                        .map_err(|e| format!("{}{}", tr("写入失败: ", "Write failed: "), e))
                 }
                 "html" => {
-                    let raw = std::fs::read(src).map_err(|e| format!("读取失败: {}", e))?;
+                    let raw = std::fs::read(src).map_err(|e| format!("{}{}", tr("读取失败: ", "Read failed: "), e))?;
                     let content = if raw.starts_with(&[0xEF, 0xBB, 0xBF]) {
                         String::from_utf8_lossy(&raw[3..]).to_string()
                     } else {
@@ -594,9 +656,9 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
                             .replace('<', "&lt;")
                             .replace('>', "&gt;")
                     );
-                    std::fs::write(&dst, html).map_err(|e| format!("写入失败: {}", e))
+                    std::fs::write(&dst, html).map_err(|e| format!("{}{}", tr("写入失败: ", "Write failed: "), e))
                 }
-                _ => Err(format!("csv → {}：暂不支持", target)),
+                _ => Err(format!("{} → {}: {}", "csv", target, tr("暂不支持", "not supported"))),
             },
             _ => Err("当前版本不支持该类型".to_string()),
         };
@@ -606,15 +668,16 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
                 let after = std::fs::metadata(&dst).map(|m| m.len()).unwrap_or(0);
                 if after == 0 {
                     let _ = std::fs::remove_file(&dst);
-                    failures.push(format!("{}：输出为空", name));
+                    failures.push(format!("{}: {}", name, tr("输出为空", "output is empty")));
                     continue;
                 }
                 // 压缩不倒退：比原文件还大就丢弃，避免误导
                 if job.mode == "compress" && after >= info.size {
                     let _ = std::fs::remove_file(&dst);
                     failures.push(format!(
-                        "{}：已是最小（{} → {}），未生成新文件",
+                        "{}: {} ({} → {})",
                         name,
+                        tr("已是最小，未生成新文件", "already minimal, no new file"),
                         info.size_label,
                         human_size(after)
                     ));
@@ -625,7 +688,14 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
                     // 文字/表格类文件本来就只有 XML，重打包收益天然接近 0；
                     // 如实标出来，避免用户以为「更小」档没生效。
                     if ratio >= 88.0 {
-                        format!("{:.0}% · 已接近极限（以文字为主，无更多可压图片）", ratio)
+                        format!(
+                            "{:.0}% · {}",
+                            ratio,
+                            tr(
+                                "已接近极限（以文字为主，无更多可压图片）",
+                                "near the limit (text-only, no more images to shrink)"
+                            )
+                        )
                     } else {
                         format!("{:.0}%", ratio)
                     }
@@ -646,7 +716,7 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
             Err(err) => {
                 let _ = std::fs::remove_file(&dst);
                 if err == "已取消" {
-                    failures.push("任务已取消".to_string());
+                    failures.push(tr("任务已取消", "Task cancelled"));
                     break;
                 }
                 failures.push(format!("{}：{}", name, err));
@@ -657,12 +727,18 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
     let ok = !outputs.is_empty();
     let message = if ok {
         if failures.is_empty() {
-            format!("完成 {} 个文件", outputs.len())
+            format!("{} {}", tr("完成", "Finished"), outputs.len())
         } else {
-            format!("完成 {} 个文件，{} 个未处理", outputs.len(), failures.len())
+            format!(
+                "{} {} {} {}",
+                tr("完成", "Finished"),
+                outputs.len(),
+                tr("个文件，未处理", "files, skipped"),
+                failures.len()
+            )
         }
     } else if failures.is_empty() {
-        "没有可处理的文件".to_string()
+        tr("没有可处理的文件", "Nothing to process")
     } else {
         failures.join("\n")
     };

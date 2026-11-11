@@ -721,6 +721,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "desktop-pet-tool"
+version = "1.0.0"
+dependencies = [
+ "cfb",
+ "clipboard-rs",
+ "encoding_rs",
+ "flate2",
+ "futures-util",
+ "image",
+ "lopdf",
+ "percent-encoding",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "url",
+ "windows 0.59.0",
+ "windows-core 0.59.0",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -968,30 +992,6 @@ checksum = "38e2275cc4e4fc009b0669731a1e5ab7ebf11f469eaede2bab9309a5b4d6057f"
 dependencies = [
  "memoffset",
  "rustc_version",
-]
-
-[[package]]
-name = "file-paste-float"
-version = "1.0.0"
-dependencies = [
- "cfb",
- "clipboard-rs",
- "encoding_rs",
- "flate2",
- "futures-util",
- "image",
- "lopdf",
- "percent-encoding",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "url",
- "windows 0.59.0",
- "windows-core 0.59.0",
 ]
 
 [[package]]
