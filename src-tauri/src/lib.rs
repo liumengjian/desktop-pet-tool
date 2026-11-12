@@ -49,6 +49,10 @@ struct Config {
     /// 界面语言：zh（默认）| en。旧配置文件没有这个字段时按默认值补齐。
     #[serde(default = "default_lang")]
     lang: String,
+    /// 上一次从右键菜单打开的工具菜单项 id（paste / docs …）。
+    /// 左键点悬浮主体时会再次打开它；空串表示还没用过任何工具。
+    #[serde(default)]
+    last_tool: String,
 }
 
 fn default_lang() -> String {
@@ -68,6 +72,7 @@ impl Default for Config {
             // 点击悬浮球右上角关闭按钮时，默认最小化到系统托盘（而非直接退出）
             close_to_tray: true,
             lang: default_lang(),
+            last_tool: String::new(),
         }
     }
 }
@@ -542,6 +547,54 @@ fn open_docs(app: &AppHandle, paths: Option<Vec<String>>) {
 }
 
 // ============== 菜单 ==============
+/// 右键菜单里属于「工具」的条目 id。
+///
+/// 打开过其中任意一项后，左键点悬浮主体会再次打开同一项。以后新增工具类菜单项，
+/// 只要把 id 加进这张表、并在 `run_tool_menu_item` 里补一条执行分支，左键行为就自动
+/// 生效，不需要再改点击逻辑。
+const TOOL_MENU_IDS: &[&str] = &["paste", "docs"];
+
+fn is_tool_menu_item(id: &str) -> bool {
+    TOOL_MENU_IDS.contains(&id)
+}
+
+/// 执行一个工具类菜单项；不是工具类返回 false
+fn run_tool_menu_item(app: &AppHandle, id: &str) -> bool {
+    match id {
+        "paste" => {
+            let _ = app.emit_to("main", "float-activate-input", ());
+            true
+        }
+        "docs" => {
+            open_docs(app, None);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// 记住这次打开的工具，供左键点主体时复用
+fn remember_tool(app: &AppHandle, id: &str) {
+    let state = app.state::<AppState>();
+    let mut cfg = state.config.lock().unwrap();
+    if cfg.last_tool == id {
+        return;
+    }
+    cfg.last_tool = id.to_string();
+    save_config(app, &cfg);
+}
+
+/// 左键点悬浮主体：打开上次从右键菜单用过的工具。
+/// 没有记录（或记录已失效）时返回 false，由前端回落到原本的收起行为。
+#[tauri::command]
+fn open_last_tool(app: AppHandle) -> bool {
+    let id = app.state::<AppState>().config.lock().unwrap().last_tool.clone();
+    if !is_tool_menu_item(&id) {
+        return false;
+    }
+    run_tool_menu_item(&app, &id)
+}
+
 /// 构建右键菜单 / 托盘菜单，并把各项句柄一起返回（句柄用于切语言时就地改文字）。
 /// 刻意把配置作为参数传入而不是在这里 `state.config.lock()`：切换语言会从 `config_set`
 /// 触发菜单文案刷新，若这里再去取同一把不可重入的 `Mutex`，就会自锁。
@@ -579,18 +632,19 @@ fn build_menu(
 }
 
 fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
-    match event.id().as_ref() {
-        "paste" => {
-            let _ = app.emit_to("main", "float-activate-input", ());
-        }
+    let id = event.id().as_ref().to_string();
+    // 工具类条目：先记下它是「上次用过的工具」，再按同一份实现执行
+    if is_tool_menu_item(&id) {
+        remember_tool(app, &id);
+        run_tool_menu_item(app, &id);
+        return;
+    }
+    match id.as_str() {
         "settings" => {
             let app_owned = app.to_owned();
             let _ = tauri::async_runtime::spawn(async move {
                 open_settings_command(app_owned).await;
             });
-        }
-        "docs" => {
-            open_docs(app, None);
         }
         "open" => {
             let cfg = app.state::<AppState>().config.lock().unwrap().clone();
@@ -878,6 +932,7 @@ pub fn run() {
             drag_end,
             request_close,
             open_context_menu,
+            open_last_tool,
             notify_blur,
             open_settings_command,
             close_settings,

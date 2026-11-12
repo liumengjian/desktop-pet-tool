@@ -355,12 +355,21 @@ fn load_font(doc: &Document, dict: &Dictionary) -> PdfFont {
         .unwrap_or_default();
     let two_byte = subtype == b"Type0" || encoding == b"Identity-H" || encoding == b"Identity-V";
 
+    // /DescendantFonts 通常是间接引用（如 `/DescendantFonts 10 0 R` → `[ 11 0 R ]`），
+    // 只认直接数组会漏掉整个 CIDFont，导致所有 Type0 字体（中文）一个字形都画不出来。
     let cid_dict = if two_byte {
-        dict.get(b"DescendantFonts")
+        let descendant: Option<&Object> = dict
+            .get(b"DescendantFonts")
             .ok()
-            .and_then(|o| o.as_array().ok())
-            .and_then(|a| a.first())
-            .and_then(|o| resolve_dict(doc, o))
+            .and_then(|o| match o {
+                Object::Array(a) => a.first(),
+                Object::Reference(id) => match doc.get_object(*id).ok() {
+                    Some(o2) => o2.as_array().ok().and_then(|a| a.first()),
+                    None => None,
+                },
+                _ => None,
+            });
+        descendant.and_then(|o| resolve_dict(doc, o))
     } else {
         None
     };
@@ -456,7 +465,7 @@ fn load_font(doc: &Document, dict: &Dictionary) -> PdfFont {
 }
 
 /// 解码图像 XObject → (宽, 高, RGB)
-fn decode_image(stream: &Stream) -> Option<(usize, usize, Vec<u8>)> {
+pub(crate) fn decode_image(stream: &Stream) -> Option<(usize, usize, Vec<u8>)> {
     let dict = &stream.dict;
     let width = dict.get(b"Width").ok().and_then(|o| num_of(o))? as usize;
     let height = dict.get(b"Height").ok().and_then(|o| num_of(o))? as usize;
@@ -711,7 +720,9 @@ impl Rasterizer {
                     continue;
                 }
                 let sx = ((u * iw as f32) as usize).min(iw - 1);
-                let sy = ((v * ih as f32) as usize).min(ih - 1);
+                // PDF 图像空间 v 轴向上（v=1 是图像顶部），而解码出来的 rgb 行序是
+                // 从上到下，所以要取反，否则整张图会上下颠倒。
+                let sy = (((1.0 - v) * ih as f32) as usize).min(ih - 1);
                 let off = (sy * iw + sx) * 3;
                 let idx = ((dy as usize) * self.canvas.w + dx as usize) * 4;
                 self.canvas.pixels[idx] = rgb[off];

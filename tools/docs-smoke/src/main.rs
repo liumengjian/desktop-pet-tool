@@ -169,6 +169,43 @@ fn main() {
         }
         return;
     }
+    // PDF 渲染调试：docs-smoke renderpdf <文件> [dpi] —— 不参与 ALL PASS 判定
+    if let Some(pos) = args.iter().position(|a| a == "renderpdf") {
+        let src = PathBuf::from(&args[pos + 1]);
+        let dpi: f32 = args.get(pos + 2).and_then(|v| v.parse().ok()).unwrap_or(110.0);
+        match pdf_render::render_pages(&src, dpi, &no_cancel, |num, w, h, rgba| {
+            let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
+                .ok_or_else(|| "buffer size mismatch".to_string())?;
+            let dst = out(&format!("render-{:03}.png", num));
+            img.save(&dst).map_err(|e| e.to_string())?;
+            println!("[render] {} {}x{}", dst.display(), w, h);
+            Ok(())
+        }) {
+            Ok(st) => println!("[render] pages={} cff_pages={}", st.pages, st.cff_pages),
+            Err(err) => println!("[render] failed: {}", err),
+        }
+        return;
+    }
+    // PDF → DOCX 调试：docs-smoke pdfdocx <文件>
+    if let Some(pos) = args.iter().position(|a| a == "pdfdocx") {
+        let src = PathBuf::from(&args[pos + 1]);
+        let dst = out("pdfdocx.docx");
+        match from_pdf::to_docx(&src, &dst, &no_cancel) {
+            Ok(()) => println!("[pdfdocx] {} {} bytes", dst.display(), size(&dst)),
+            Err(err) => println!("[pdfdocx] failed: {}", err),
+        }
+        return;
+    }
+    // PDF → XLSX 调试：docs-smoke pdfxlsx <文件>
+    if let Some(pos) = args.iter().position(|a| a == "pdfxlsx") {
+        let src = PathBuf::from(&args[pos + 1]);
+        let dst = out("pdfxlsx.xlsx");
+        match from_pdf::to_xlsx(&src, &dst, &no_cancel) {
+            Ok(()) => println!("[pdfxlsx] {} {} bytes", dst.display(), size(&dst)),
+            Err(err) => println!("[pdfxlsx] failed: {}", err),
+        }
+        return;
+    }
     let mut r = Report { fails: Vec::new() };
 
     // 1) Office 压缩：体积、结构、正文不变
@@ -688,7 +725,9 @@ fn main() {
     let pdf_docx = out("from-pdf.docx");
     match from_pdf::to_docx(&text_pdf, &pdf_docx, &no_cancel) {
         Ok(()) => {
-            r.check(size(&pdf_docx) > 2000, "pdf→docx 体积正常");
+            // 结构化输出后每段 XML 比原来更精简，体积门槛按"确实是完整包装"来定，
+            // 内容完整性由下面的回读断言保证
+            r.check(size(&pdf_docx) > 1000, "pdf→docx 体积正常");
             let back = out("from-pdf-docx-back.txt");
             match text_ops::docx_to_txt(&pdf_docx, &back, &no_cancel) {
                 Ok(()) => {

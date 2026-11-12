@@ -6,6 +6,8 @@ window.api = {
   setConfig: (cfg) => window.__TAURI__.core.invoke('config_set', { newCfg: cfg }),
   pickTempDir: () => window.__TAURI__.core.invoke('config_pick_temp_dir'),
   openContextMenu: () => window.__TAURI__.core.invoke('open_context_menu'),
+  // 打开上次右键用过的工具；没有记录时返回 false（前端据此回落到收起气泡）
+  openLastTool: () => window.__TAURI__.core.invoke('open_last_tool'),
   onActivateInput: (cb) => window.__TAURI__.event.listen('float-activate-input', () => cb()),
   onToast: (cb) => window.__TAURI__.event.listen('float-toast', (e) => cb(e.payload)),
   notifyBlur: () => window.__TAURI__.core.invoke('notify_blur'),
@@ -192,10 +194,15 @@ document.addEventListener('mouseup', (e) => {
         showMood('21'); // 生气
         return;
       }
-      // 点击球不再弹出「文档复制」输入气泡：气泡只由右键菜单「文档复制」打开，
-      // 已打开的气泡则随点击收起。文档气泡同理。
-      if (docs.open) hideDocsPanel();
-      if (expanded) collapse();
+      // 左键点球：打开上次右键菜单里用过的工具（文档复制 / 文档工具）。
+      // 还没用过任何工具时保持原行为——把已展开的气泡收起。
+      const closePanels = () => {
+        if (docs.open) hideDocsPanel();
+        if (expanded) collapse();
+      };
+      window.api.openLastTool()
+        .then((opened) => { if (!opened) closePanels(); })
+        .catch(closePanels);
     } else if (!e.target.closest('#bubble') && !e.target.closest('#docsBubble') && !e.target.closest('#msgBubble')) {
       // 点击窗口内空白（气泡以外）→ 收起气泡与文档面板
       if (expanded) collapse();
@@ -556,6 +563,7 @@ const docs = {
   target: null,
   outputs: [],
   running: false,
+  batch: [],         // 正在处理的那一批，跑完后从中摘掉、清出列表
 };
 
 let docsEntering = false;    // 连续拖入时避免重复播放入场
@@ -838,6 +846,9 @@ async function startDocsJob() {
   docs.running = true;
   docs.stage = 'running';
   docs.outputs = [];
+  // 记下这一批的文件，跑完后只把它们从列表里摘掉——
+  // 跑的过程中新拖进来的文件要留在面板里，等下一批处理。
+  docs.batch = docs.files.map((f) => f.path);
   docsRunName.textContent = docs.files[0] ? docs.files[0].name : '';
   docsRunLabel.textContent = T('docs.fileCount', { n: docs.files.length });
   docsRunPct.textContent = '0%';
@@ -880,6 +891,10 @@ function onDocsDone(payload) {
   docs.running = false;
   docs.outputs = (payload && payload.outputs) || [];
   hideRing();
+  // 这一批已经结束：把它们从已上传列表里摘掉，再次打开面板从「选择文件」开始，
+  // 不会把上一批文件带回来。结果仍留在 docs.outputs 里给完成页展示。
+  docs.files = docs.files.filter((f) => !(docs.batch || []).includes(f.path));
+  docs.batch = [];
 
   // 用户中途收了气泡：只在球边提示一句，不强行弹回面板
   if (!docs.open) {
@@ -888,7 +903,6 @@ function onDocsDone(payload) {
     } else {
       showMsg(T('docs.failedToast'), 2600);
     }
-    docs.files = [];
     return;
   }
 
