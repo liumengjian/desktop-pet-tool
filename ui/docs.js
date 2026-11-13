@@ -153,6 +153,12 @@ function syncControls() {
   el.modeCompress.disabled = false;
   el.modeConvert.disabled = false;
 
+  if (state.mode === 'convert' && state.target === 'docx' && state.files.some((f) => f.kind === 'pdf')) {
+    el.targetHint.textContent = 'PDF 转 Word：文字和规则表格可编辑，照片、线条可单独移动；尽量保留原分页与字体，缺失字体或扫描件会提示。';
+  } else if (supportedTargets().length) {
+    el.targetHint.textContent = '输出为同名文件，保存在「临时文件夹」（右键菜单可打开或清理）；不支持的格式会单独提示';
+  }
+
   let ready = false;
   if (hasFiles && state.mode === 'compress') {
     ready = state.files.some((f) => f.canCompress);
@@ -286,8 +292,8 @@ function showDone(payload) {
   el.stageRun.hidden = true;
   el.stageDone.hidden = false;
 
-  el.doneTitle.textContent = payload.ok ? '处理完成' : '没有生成文件';
-  el.doneMsg.textContent = payload.message || '';
+  el.doneTitle.textContent = payload.ok ? '处理成功' : '处理失败';
+  el.doneMsg.textContent = '';
   el.doneDir.textContent = payload.outdir ? `输出目录：${payload.outdir}` : '';
 
   el.resultList.innerHTML = '';
@@ -302,12 +308,8 @@ function showDone(payload) {
 
     const delta = document.createElement('span');
     delta.className = 'delta';
-    if (item.note) {
-      delta.textContent = `${item.before} → ${item.after}（${item.note}）`;
-    } else {
-      delta.textContent = item.after;
-      delta.classList.add('flat');
-    }
+    delta.textContent = '处理成功';
+    delta.classList.add('flat');
     row.append(name, delta);
     el.resultList.appendChild(row);
   });

@@ -105,20 +105,20 @@ struct MenuHandles {
     docs: MenuItem<tauri::Wry>,
     open: MenuItem<tauri::Wry>,
     clean: MenuItem<tauri::Wry>,
-    settings: MenuItem<tauri::Wry>,
     autostart: CheckMenuItem<tauri::Wry>,
+    settings: MenuItem<tauri::Wry>,
     quit: MenuItem<tauri::Wry>,
 }
 
 impl MenuHandles {
-    /// 按当前语言刷新七项文案。只调用 Win32 的菜单项文本更新，不触碰托盘宿主。
+    /// 按当前语言刷新各项文案。只调用 Win32 的菜单项文本更新，不触碰托盘宿主。
     fn apply_lang(&self) {
         let _ = self.paste.set_text(i18n::t("文档复制", "Copy documents"));
         let _ = self.docs.set_text(i18n::t("文档工具", "Document tools"));
         let _ = self.open.set_text(i18n::t("打开临时文件夹", "Open temp folder"));
         let _ = self.clean.set_text(i18n::t("清理临时文件夹", "Clean temp folder"));
-        let _ = self.settings.set_text(i18n::t("设置", "Settings"));
         let _ = self.autostart.set_text(i18n::t("开机自启动", "Launch at login"));
+        let _ = self.settings.set_text(i18n::t("设置", "Settings"));
         let _ = self.quit.set_text(i18n::t("退出", "Quit"));
     }
 }
@@ -609,23 +609,23 @@ fn build_menu(
     let open = MenuItemBuilder::with_id("open", i18n::t("打开临时文件夹", "Open temp folder")).build(app)?;
     let clean =
         MenuItemBuilder::with_id("clean", i18n::t("清理临时文件夹", "Clean temp folder")).build(app)?;
-    let settings = MenuItemBuilder::with_id("settings", i18n::t("设置", "Settings")).build(app)?;
     let autostart = CheckMenuItemBuilder::with_id("autostart", i18n::t("开机自启动", "Launch at login"))
         .checked(cfg.auto_start)
         .build(app)?;
+    let settings = MenuItemBuilder::with_id("settings", i18n::t("设置", "Settings")).build(app)?;
     let quit = MenuItemBuilder::with_id("quit", i18n::t("退出", "Quit")).build(app)?;
     let menu = MenuBuilder::new(app)
         .items(&[&paste, &docs])
         .separator()
-        .items(&[&open, &clean, &settings, &autostart, &quit])
+        .items(&[&open, &clean, &autostart, &settings, &quit])
         .build()?;
     let handles = MenuHandles {
         paste,
         docs,
         open,
         clean,
-        settings,
         autostart,
+        settings,
         quit,
     };
     Ok((menu, handles))
@@ -841,6 +841,19 @@ pub fn run() {
         })
         .manage(docs::DocsState::default())
         .setup(|app| {
+            // 安装期预下载：NSIS 钩子以 --fetch-pdf-deps 拉起本程序，只拉取外置依赖后退出，
+            // 不建窗口/托盘。退出码 0 = 就绪；非 0 = 失败，安装器跳过、首启再补下载。
+            if std::env::args().any(|a| a == "--fetch-pdf-deps") {
+                let code = match docs::sidecar_deps::ensure(app.handle()) {
+                    Ok(_) => 0,
+                    Err(e) => {
+                        eprintln!("pdf deps fetch failed: {}", e);
+                        1
+                    }
+                };
+                std::process::exit(code);
+            }
+
             let cfg = load_config(app.handle());
             // 主进程侧文案（菜单/托盘/对话框）跟随配置里的语言
             i18n::set_from_code(&cfg.lang);

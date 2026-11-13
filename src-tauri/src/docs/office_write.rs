@@ -1,6 +1,11 @@
 // 反向写出：纯文本 / Markdown → DOCX，CSV → XLSX。
 // 用 zip_min 直接拼最小 OOXML 包，不依赖任何 Office 组件。
 
+// PDF → DOCX 那条链路还在接：doc_items_to_docx 与它的一批 helper（字体归一化、页眉页脚、
+// 表格、图片 run）目前没有调用点，属于「已写好、未接线」的状态，不是废代码。
+// 接线完成后删掉这一行即可，不要为了消警告去删这些函数。
+#![allow(dead_code)]
+
 use std::path::Path;
 
 use super::zip_min::{write_zip, OutEntry};
@@ -362,8 +367,82 @@ fn half_points(size: f32) -> u32 {
     ((size.max(5.0)) * 2.0).round() as u32
 }
 
-fn docx_run(text: &str, color: Option<[u8; 3]>, size: f32, bold: bool) -> String {
-    let mut props = String::new();
+const DEFAULT_ASCII_FONT: &str = "Times New Roman";
+const DEFAULT_EAST_ASIAN_FONT: &str = "宋体";
+
+/// 去掉子集前缀（ABCDEF+）与粗斜体后缀，留下字体本名
+fn normalize_pdf_font(raw: &str) -> String {
+    let name = raw.split('+').last().unwrap_or(raw).trim();
+    let base = name
+        .trim_end_matches("-BoldItalic")
+        .trim_end_matches("-Bold")
+        .trim_end_matches("-Italic")
+        .trim_end_matches("-Regular");
+    base.trim().to_string()
+}
+
+/// PDF 内部 PostScript 名 → Word 认识的字体名（key 已小写、去空格/横线）
+fn western_font_map(key: &str) -> Option<&'static str> {
+    match key {
+        "timesnewromanps" | "timesnewromanpsmt" | "timesnewromanpsboldmt"
+        | "timesnewromanpsbold" => Some("Times New Roman"),
+        "arialmt" | "arialboldmt" | "arial" => Some("Arial"),
+        "helvetica" | "helveticabold" => Some("Arial"),
+        "couriernewps" | "couriernewpsmt" | "couriernew" => Some("Courier New"),
+        "courier" => Some("Courier New"),
+        "symbol" => Some("Symbol"),
+        _ => None,
+    }
+}
+
+/// 已知中文字体名（原样保留，不回退宋体；key 已小写、去空格/横线）
+fn is_cjk_font_name(key: &str) -> bool {
+    matches!(
+        key,
+        "simsun" | "nsimsun" | "songti" | "宋体" | "kaiti" | "楷体" | "simhei" | "黑体"
+            | "microsoftyahei" | "微软雅黑" | "dengxian" | "等线" | "fangsong" | "仿宋"
+    )
+}
+
+/// 解析出 (西文字体, 中文字体)：未知西文 PS 名映射到 Word 友好名，未知中文字体回退宋体
+fn resolve_fonts(raw: &str) -> (String, String) {
+    let normalized = normalize_pdf_font(raw);
+    let key: String = normalized
+        .to_lowercase()
+        .replace(' ', "")
+        .replace('-', "");
+    let ascii = western_font_map(&key)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            if normalized.is_empty() {
+                DEFAULT_ASCII_FONT.to_string()
+            } else {
+                normalized.clone()
+            }
+        });
+    let eastasia = if is_cjk_font_name(&key) {
+        normalized.clone()
+    } else {
+        DEFAULT_EAST_ASIAN_FONT.to_string()
+    };
+    (ascii, eastasia)
+}
+
+/// 生成 rFonts 节点；rPr 内必须排在最前面
+fn rfonts_xml(raw: &str) -> String {
+    let (ascii, east) = resolve_fonts(raw);
+    format!(
+        "<w:rFonts w:ascii=\"{}\" w:hAnsi=\"{}\" w:eastAsia=\"{}\" w:cs=\"{}\"/>",
+        escape_xml(&ascii),
+        escape_xml(&ascii),
+        escape_xml(&east),
+        escape_xml(&ascii)
+    )
+}
+
+fn docx_run(text: &str, color: Option<[u8; 3]>, size: f32, bold: bool, font: &str) -> String {
+    // rPr 子节点固定顺序：rFonts 必须在 b/color/sz 之前
+    let mut props = rfonts_xml(font);
     if bold {
         props.push_str("<w:b/>");
     }
@@ -420,8 +499,8 @@ fn docx_para(line: &LineData, left: f32, right: f32, before_twips: u32) -> Strin
             );
             let runs = format!(
                 "{}<w:r><w:tab/></w:r>{}",
-                docx_run(head.trim_end(), line.color, line.size, false),
-                docx_run(tail, line.color, line.size, false)
+                docx_run(head.trim_end(), line.color, line.size, false, &line.font),
+                docx_run(tail, line.color, line.size, false, &line.font)
             );
             return format!("<w:p><w:pPr>{}</w:pPr>{}</w:p>", ppr, runs);
         }
@@ -435,12 +514,12 @@ fn docx_para(line: &LineData, left: f32, right: f32, before_twips: u32) -> Strin
         ));
     }
     if ppr.is_empty() {
-        docx_run_fmt(&docx_run(&line.text, line.color, line.size, false))
+        docx_run_fmt(&docx_run(&line.text, line.color, line.size, false, &line.font))
     } else {
         format!(
             "<w:p><w:pPr>{}</w:pPr>{}</w:p>",
             ppr,
-            docx_run(&line.text, line.color, line.size, false)
+            docx_run(&line.text, line.color, line.size, false, &line.font)
         )
     }
 }
@@ -542,9 +621,9 @@ fn docx_table(table: &TableData) -> String {
                 Some(c) => c.span.max(1).min(cols - col),
                 None => 1,
             };
-            let (text, fill, color, size) = match cell {
-                Some(c) => (c.text.as_str(), c.fill, c.color, c.size),
-                None => ("", None, None, 0.0),
+            let (text, fill, color, size, font) = match cell {
+                Some(c) => (c.text.as_str(), c.fill, c.color, c.size, c.font.as_str()),
+                None => ("", None, None, 0.0, ""),
             };
             let span_width: usize = (0..span).map(|k| col_width(col + k)).sum();
             let mut tc_props = format!("<w:tcW w:w=\"{}\" w:type=\"dxa\"/>", span_width);
@@ -559,7 +638,7 @@ fn docx_table(table: &TableData) -> String {
                     hex_color(f)
                 ));
             }
-            let rendered = docx_run(text, color, size, is_header);
+            let rendered = docx_run(text, color, size, is_header, font);
             out.push_str(&format!(
                 "<w:tc><w:tcPr>{}</w:tcPr><w:p>{}</w:p></w:tc>",
                 tc_props, rendered
@@ -701,7 +780,7 @@ fn header_xml(header: &HeaderBlock, image_rels: &[String]) -> String {
                 BandItem::Text(line) => {
                     inner.push_str(&format!(
                         "<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/><w:jc w:val=\"left\"/></w:pPr>{}</w:p>",
-                        docx_run(&line.text, line.color, line.size, false)
+                        docx_run(&line.text, line.color, line.size, false, &line.font)
                     ));
                 }
                 BandItem::Image(img, rel) => {
@@ -738,7 +817,7 @@ fn header_xml(header: &HeaderBlock, image_rels: &[String]) -> String {
 }
 
 /// 页码「第1 页共2 页」换成 Word 域，翻页后会自动更新
-fn page_number_runs(text: &str) -> Option<String> {
+fn page_number_runs(text: &str, font: &str) -> Option<String> {
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0usize;
     while i < chars.len() {
@@ -757,7 +836,7 @@ fn page_number_runs(text: &str) -> Option<String> {
                     let suffix: String = chars[k + 1..].iter().collect();
                     let mut out = String::new();
                     if !prefix.trim().is_empty() {
-                        out.push_str(&docx_run(prefix.trim_end(), None, 10.4, false));
+                        out.push_str(&docx_run(prefix.trim_end(), None, 10.4, false, font));
                     }
                     out.push_str(
                         "<w:r><w:t xml:space=\"preserve\">第</w:t></w:r>\
@@ -767,7 +846,7 @@ fn page_number_runs(text: &str) -> Option<String> {
                          <w:r><w:t xml:space=\"preserve\"> 页</w:t></w:r>",
                     );
                     if !suffix.trim().is_empty() {
-                        out.push_str(&docx_run(suffix.trim_start(), None, 10.4, false));
+                        out.push_str(&docx_run(suffix.trim_start(), None, 10.4, false, font));
                     }
                     return Some(out);
                 }
@@ -802,7 +881,7 @@ fn footer_xml(footer: &FooterBlock, image_rels: &[String]) -> String {
         let mut prev_end = f32::NAN;
         let mut has_page_field = false;
         for line in row.iter() {
-            match page_number_runs(&line.text) {
+            match page_number_runs(&line.text, &line.font) {
                 Some(field) => {
                     right_runs.push_str(&field);
                     has_page_field = true;
@@ -819,7 +898,7 @@ fn footer_xml(footer: &FooterBlock, image_rels: &[String]) -> String {
                             ));
                         }
                     }
-                    left_runs.push_str(&docx_run(&line.text, line.color, line.size, false));
+                    left_runs.push_str(&docx_run(&line.text, line.color, line.size, false, &line.font));
                     prev_end = line.x + band_text_width(line);
                 }
             }

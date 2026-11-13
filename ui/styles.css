@@ -145,6 +145,31 @@ body {
 }
 .bubble-close:hover { background: #f0f0f0; color: #d9534f; }
 
+/* 文档面板：首页 ↔ 完成页（二级页）的标题区，返回按钮只在二级页出现 */
+.docs-head-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.bubble-back {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: none;
+  background: transparent;
+  color: #666;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bubble-back:hover { background: #f0f0f0; color: #333; }
+
 .url-input {
   width: 100%;
   height: 28px;
@@ -179,6 +204,17 @@ body {
   border-radius: 3px;
   transition: width 0.15s ease;
 }
+/* 后端给不出中间进度时（如 PDF→DOCX 的 sidecar 黑盒），改成来回滑动的条纹，
+   不要拿 0% 骗人：告诉用户「在处理，但不知道到哪一步」。 */
+.progress-fill.is-indeterminate {
+  width: 36% !important;
+  transition: none;
+  animation: progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(320%); }
+}
 .progress-text {
   font-size: 10px;
   color: #888;
@@ -200,6 +236,9 @@ body {
 /* ===== 消息提示气泡（清理完成、复制成功等，对话冒泡样式） =====
    注意：不能设置 overflow:hidden，否则会把指向主体的箭头裁掉 */
 .msg-bubble {
+  /* 宽度跟着文字走，短消息不再是一条长条；超过 224px 才换行 */
+  width: max-content;
+  max-width: 224px;
   min-height: 34px;
   display: flex;
   align-items: center;
@@ -208,8 +247,11 @@ body {
   color: #333;
   padding: 8px 14px;
   text-align: center;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.35;
 }
+/* 气泡变窄后箭头要重新对到主体中心（主体 right:22 + 宽 64 → 中心距右边 54） */
+.msg-bubble::after { right: 26px; }
 
 /* ===== 文档工具气泡：拖入文件后在球上方浮出，替代原来的独立窗口 ===== */
 .docs-bubble {
@@ -295,6 +337,7 @@ body {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
+  height: 26px;
 }
 .chip-row.hidden { display: none; }
 
@@ -402,14 +445,16 @@ body {
 }
 .docs-results {
   margin-top: 6px;
-  max-height: 110px;
-  overflow-y: auto;
+  /* max-height: 110px;
+  overflow-y: auto; */
+  
 }
 .docs-results::-webkit-scrollbar { width: 4px; }
 .docs-results::-webkit-scrollbar-thumb { background: #d8d8d8; border-radius: 2px; }
 
 .docs-result-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   font-size: 10px;
@@ -417,14 +462,21 @@ body {
   padding: 2px 0;
 }
 .docs-result-row .name {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: #333;
 }
-.docs-result-row .delta { flex: none; color: #3a9d5d; }
+.docs-result-row .delta {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: #3a9d5d;
+}
 
 /* ===== 球体进度环与百分比胶囊 ===== */
 .ball-progress {

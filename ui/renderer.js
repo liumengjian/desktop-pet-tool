@@ -65,11 +65,25 @@ async function showMsg(msg, duration = 2200) {
   }
   clearTimeout(msgTimer);
   msgBubble.textContent = msg;
-  await resizeNow(MSG_SIZE[0], MSG_SIZE[1]);
+  // 同一时刻只留一个气泡：文档面板开着时先让它退场，消息结束后再原样放回。
+  // 三者共用 bottom:100px / right:22px，且窗口尺寸各按自己那套给（224 / 320 / 224 宽），
+  // 直接叠着显示就会互相压住、外层还被裁窄。
+  if (docs.open) {
+    bubbleHide(docsBubble);
+    await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
+  }
+  const box = measureMsg(msg);
+  // 区域始终右锚定：气泡右边距 22，宽度跟着文字走，球的位置不受影响。
+  await resizeNow(Math.max(COLLAPSED_SIZE[0], box.width + 44), Math.round(box.height + 112));
   // 等窗口尺寸真正落屏后再播放入场，避免气泡在窗口仍处于收缩尺寸时开始淡入而被裁切
   requestAnimationFrame(() => bubbleShow(msgBubble));
   msgTimer = setTimeout(() => {
     bubbleHide(msgBubble);
+    if (docs.open) {
+      // 面板还开着（例如转换完成时弹的提示）：等消息退场后把窗口和面板交还给它
+      setTimeout(() => { if (docs.open) docsLayout(); }, BUBBLE_HIDE_MS);
+      return;
+    }
     resizeLater(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
   }, duration);
 }
@@ -77,7 +91,25 @@ async function showMsg(msg, duration = 2200) {
 // ===== 展开 / 收起（主体始终显示，气泡在主体上方弹出） =====
 const COLLAPSED_SIZE = [112, 112];
 const EXPANDED_SIZE = [264, 232];
-const MSG_SIZE = [264, 142];
+
+// 提示气泡按文字长度自适应宽度：短消息（如“临时文件夹已清理”）不再撑成一条长条。
+const MSG_PAD_X = 28;        // bubble 左右内边距 14 + 14
+const MSG_MIN_W = 96;        // 再短也不窄于这个宽度
+const MSG_MAX_W = 224;       // 与 .bubble 一致，超过就换行
+const MSG_LINE_H = 34;       // 单行气泡高度（.msg-bubble min-height）
+let msgMeasureCtx = null;
+
+function measureMsg(msg) {
+  if (!msgMeasureCtx) msgMeasureCtx = document.createElement('canvas').getContext('2d');
+  // 用字号 + 字体族拼 canvas font（整条 font 简写里带行高时 canvas 可能解析失败）
+  const style = getComputedStyle(msgBubble);
+  msgMeasureCtx.font = `${style.fontSize} ${style.fontFamily}`;
+  const textWidth = msgMeasureCtx.measureText(msg).width;
+  // 换行按内容宽度算（border-box 的 224 里还含左右各 14 的内边距）
+  const lines = Math.max(1, Math.ceil(textWidth / (MSG_MAX_W - MSG_PAD_X)));
+  const width = Math.min(MSG_MAX_W, Math.max(MSG_MIN_W, Math.ceil(textWidth) + MSG_PAD_X + 2));
+  return { width, lines, height: MSG_LINE_H + (lines - 1) * 16 };
+}
 
 // resize 窗口尺寸（表情动画由引擎 rAF 驱动，无需额外处理）
 async function resizeWindowSmooth(w, h) {
@@ -129,6 +161,12 @@ function resizeLater(w, h, delay = BUBBLE_HIDE_MS) {
 
 async function expand() {
   if (expanded) return;
+  // 文档面板与输入气泡互斥：先把面板收起再展开，否则两块气泡会叠在同一位置
+  if (docs.open) {
+    hideDocsPanel();
+    // 等面板退场（200ms）再缩窗口，否则 320 宽的面板会在淡出途中被 264 的窗口裁掉左边一截
+    await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
+  }
   expanded = true;
   // 窗口先展开，等尺寸落屏后再播放入场，避免气泡被窗口边缘裁切/闪动
   await resizeNow(EXPANDED_SIZE[0], EXPANDED_SIZE[1]);
@@ -522,6 +560,7 @@ const docsDoneMsg = document.getElementById('docsDoneMsg');
 const docsResults = document.getElementById('docsResults');
 const docsOpenDir = document.getElementById('docsOpenDir');
 const docsAgain = document.getElementById('docsAgain');
+const docsBack = document.getElementById('docsBack');
 const ballProgress = document.getElementById('ballProgress');
 const ringArc = document.getElementById('ringArc');
 const ballPctPill = document.getElementById('ballPctPill');
@@ -567,6 +606,7 @@ const docs = {
 };
 
 let docsEntering = false;    // 连续拖入时避免重复播放入场
+let docsQuietTimer = 0;      // 进度静默计时器：超时就把进度条切成「不确定进度」
 
 // ---------- 面板尺寸：按内容高度自适应 ----------
 async function docsLayout() {
@@ -583,9 +623,13 @@ function openDocsPanel() {
   if (expanded) collapse();
   if (!msgBubble.classList.contains('hidden')) bubbleHide(msgBubble);
   docs.open = true;
-  docs.stage = 'choose';
-  docs.mode = null;
-  docs.target = null;
+  // 完成页 / 运行中的进度页再打开时保持原页面：面板因失焦收起后，
+  // 再点悬浮球应该回到刚才看到的那一页，而不是退回首页。
+  if (docs.stage !== 'done' && docs.stage !== 'running') {
+    docs.stage = 'choose';
+    docs.mode = null;
+    docs.target = null;
+  }
   renderDocs();
   // 面板里有待处理文件时保持「检索资料」，收起面板或开跑后由其他表情接手
   if (docs.files.length && !docs.running) {
@@ -695,52 +739,62 @@ function syncDocsControls() {
   const hasFiles = docs.files.length > 0;
   docsPick.textContent = hasFiles ? T('docs.pickMore') : T('docs.pick');
 
+  // 提示行在 index.html 里是可选元素（当前被注释掉了）：没有它也要照常工作
+  const setDocsHint = (text) => { if (docsHint) docsHint.textContent = text; };
+
   if (docs.stage === 'options' && docs.mode === 'convert') {
     const targets = docsTargetsFor(docs.files);
     docsStart.disabled = !(hasFiles && targets.length && docs.target);
     if (!hasFiles) {
-      docsHint.textContent = T('docs.hintAddFirst');
+      setDocsHint(T('docs.hintAddFirst'));
     } else if (!targets.length) {
       const first = docs.files.find((f) => !f.targets || !f.targets.length);
-      docsHint.textContent = first
+      setDocsHint(first
         ? T('docs.hintNoTargetOne', { name: first.name })
-        : T('docs.hintNoTarget');
+        : T('docs.hintNoTarget'));
     } else {
-      docsHint.textContent = docs.target
+      setDocsHint(docs.target
         ? T('docs.hintWillConvert', { fmt: docs.target.toUpperCase() })
-        : T('docs.hintPickTarget');
+        : T('docs.hintPickTarget'));
     }
   } else if (docs.stage === 'options' && docs.mode === 'compress') {
     const ok = docsCompressible();
     docsStart.disabled = !(hasFiles && ok.length);
     if (!hasFiles) {
-      docsHint.textContent = T('docs.hintAddFirst');
+      setDocsHint(T('docs.hintAddFirst'));
     } else if (!ok.length) {
       const first = docs.files[0];
-      docsHint.textContent = first ? first.compressHint : T('docs.hintNoCompress');
+      setDocsHint(first ? first.compressHint : T('docs.hintNoCompress'));
     } else {
       const skip = docs.files.length - ok.length;
       const levelName = docs.level === 'small'
         ? T('docs.levelSmall')
         : docs.level === 'high' ? T('docs.levelHigh') : T('docs.levelNormal');
-      docsHint.textContent = skip > 0
+      setDocsHint(skip > 0
         ? T('docs.hintCompressSkip', { ok: ok.length, skip })
-        : T('docs.hintCompressLevel', { level: levelName });
+        : T('docs.hintCompressLevel', { level: levelName }));
     }
   } else {
-    docsStart.disabled = !hasFiles;
-    docsHint.textContent = hasFiles ? T('docs.hintPickMode') : T('docs.empty');
+    // 还没选「转换 / 压缩」时不能开跑：光有文件不足以确定要做什么
+    docsStart.disabled = !hasFiles || !docs.mode;
+    setDocsHint(hasFiles ? T('docs.hintPickMode') : T('docs.empty'));
   }
 }
 
 function renderDocs() {
   renderDocsFiles();
 
+  // 面板是两级的：首页（选动作 / 选文件 / 进度）和完成页。完成页只留结果，
+  // 首页元素全部收起，靠标题栏的返回按钮回到首页。
+  const onDonePage = docs.stage === 'done';
   const showChoices = docs.stage === 'choose' || docs.stage === 'options';
+  // 运行中只保留进度面板（文件名由 docsRunName 展示），避免文件列表与进度区重复显示文件名
+  docsFiles.classList.toggle('hidden', docs.stage === 'running' || onDonePage);
+  docsBack.classList.toggle('hidden', !onDonePage);
   docsModes.classList.toggle('hidden', !showChoices);
   docsTargets.classList.toggle('hidden', !(docs.stage === 'options' && docs.mode === 'convert'));
   docsLevels.classList.toggle('hidden', !(docs.stage === 'options' && docs.mode === 'compress'));
-  docsHint.classList.toggle('hidden', !showChoices);
+  if (docsHint) docsHint.classList.toggle('hidden', !showChoices);
   docsActions.classList.toggle('hidden', !showChoices);
   docsRun.classList.toggle('hidden', docs.stage !== 'running');
   docsDone.classList.toggle('hidden', docs.stage !== 'done');
@@ -755,6 +809,22 @@ function renderDocs() {
   docsTitle.textContent = docs.files.length
     ? T(docs.files.length === 1 ? 'docs.titleCountOne' : 'docs.titleCount', { n: docs.files.length })
     : T('docs.title');
+}
+
+// 完成页 → 首页：丢掉这一批的结果与动作选择，回到「选转换 / 选压缩」
+function docsBackToHome() {
+  if (docs.running) return;
+  docs.stage = 'choose';
+  docs.outputs = [];
+  docs.batch = [];
+  docs.mode = null;
+  docs.target = null;
+  docs.level = 'normal';
+  Array.from(docsLevels.children).forEach((c) => {
+    c.classList.toggle('active', c.dataset.level === 'normal');
+  });
+  renderDocs();
+  docsLayout();
 }
 
 // ---------- 交互 ----------
@@ -785,11 +855,14 @@ docsLevels.addEventListener('click', (e) => {
 async function loadPendingDocs() {
   try {
     const paths = await invoke('docs_take_pending');
-    if (!Array.isArray(paths) || !paths.length) return;
+    if (!Array.isArray(paths) || !paths.length) return 0;
     const info = await invoke('docs_inspect', { paths });
+    const added = (info || []).filter((f) => !docs.files.some((x) => x.path === f.path)).length;
     mergeDocs(info || []);
+    return added;
   } catch (err) {
     console.error('读取待处理文件失败', err);
+    return 0;
   }
 }
 
@@ -812,7 +885,7 @@ async function pickDocs() {
     renderDocs();
     await docsLayout();
   } catch (err) {
-    docsHint.textContent = T('docs.pickFailed', { err });
+    if (docsHint) docsHint.textContent = T('docs.pickFailed', { err });
     docs.open = true;
     renderDocs();
     await docsLayout();
@@ -840,8 +913,25 @@ function hideRing() {
   updateRing(0);
 }
 
+// 某些链路没有中间进度（PDF→DOCX 在 sidecar 里一次跑完，只在结束时出结果），
+// 静默超过 1.2s 就把进度条改成不确定动画，不要一直停在 0% 让人以为卡死。
+function armDocsQuiet() {
+  clearTimeout(docsQuietTimer);
+  docsQuietTimer = setTimeout(() => {
+    if (!docs.running) return;
+    docsRunFill.classList.add('is-indeterminate');
+    docsRunPct.textContent = T('docs.working');
+  }, 1200);
+}
+
+function disarmDocsQuiet() {
+  clearTimeout(docsQuietTimer);
+  docsQuietTimer = 0;
+  docsRunFill.classList.remove('is-indeterminate');
+}
+
 async function startDocsJob() {
-  if (!docs.files.length || docs.running) return;
+  if (!docs.files.length || docs.running || !docs.mode) return;
   if (docs.mode === 'convert' && !docs.target) return;
   docs.running = true;
   docs.stage = 'running';
@@ -853,6 +943,8 @@ async function startDocsJob() {
   docsRunLabel.textContent = T('docs.fileCount', { n: docs.files.length });
   docsRunPct.textContent = '0%';
   docsRunFill.style.width = '0%';
+  disarmDocsQuiet();
+  armDocsQuiet();
   renderDocs();
   await docsLayout();
   showRing(0);
@@ -876,8 +968,10 @@ async function startDocsJob() {
 function onDocsProgress(payload) {
   if (!payload || !docs.running) return;
   const pct = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+  disarmDocsQuiet();
   docsRunFill.style.width = `${pct}%`;
   docsRunPct.textContent = `${Math.round(pct)}%`;
+  armDocsQuiet();
   if (payload.name) docsRunName.textContent = payload.name;
   if (payload.label) {
     docsRunLabel.textContent = payload.total
@@ -889,6 +983,7 @@ function onDocsProgress(payload) {
 
 function onDocsDone(payload) {
   docs.running = false;
+  disarmDocsQuiet();
   docs.outputs = (payload && payload.outputs) || [];
   hideRing();
   // 这一批已经结束：把它们从已上传列表里摘掉，再次打开面板从「选择文件」开始，
@@ -896,18 +991,10 @@ function onDocsDone(payload) {
   docs.files = docs.files.filter((f) => !(docs.batch || []).includes(f.path));
   docs.batch = [];
 
-  // 用户中途收了气泡：只在球边提示一句，不强行弹回面板
-  if (!docs.open) {
-    if (payload && payload.ok) {
-      showMsg(T('docs.doneToast', { n: docs.outputs.length }), 2600);
-    } else {
-      showMsg(T('docs.failedToast'), 2600);
-    }
-    return;
-  }
-
+  // 先把完成页内容准备好：即使此刻面板是收起的，下次打开也应该直接是完成页，
+  // 而不是空壳或还停在进度页。
   docs.stage = 'done';
-  docsDoneMsg.textContent = payload && payload.message ? payload.message : '';
+  docsDoneMsg.textContent = T(payload && payload.ok ? 'docs.successStatus' : 'docs.failedToast');
   docsDoneMsg.className = 'docs-done-msg' + (payload && payload.ok ? '' : ' err');
   docsResults.innerHTML = '';
   docs.outputs.forEach((item) => {
@@ -921,15 +1008,23 @@ function onDocsDone(payload) {
 
     const delta = document.createElement('span');
     delta.className = 'delta';
-    delta.textContent = item.note
-      ? `${item.before} → ${item.after}${window.I18N.isEn() ? ` (${item.note})` : `（${item.note}）`}`
-      : item.after;
-    if (item.note) delta.style.color = '#3a9d5d';
+    delta.textContent = T('docs.successStatus');
 
     row.append(name, delta);
     docsResults.appendChild(row);
   });
   docsOpenDir.disabled = !(payload && payload.ok);
+
+  // 用户中途收了气泡：只在球边提示一句，不强行弹回面板
+  if (!docs.open) {
+    if (payload && payload.ok) {
+      showMsg(T('docs.doneToast', { n: docs.outputs.length }), 2600);
+    } else {
+      showMsg(T('docs.failedToast'), 2600);
+    }
+    return;
+  }
+
   renderDocs();
   docsLayout();
 }
@@ -947,8 +1042,14 @@ docsOpenDir.addEventListener('click', (e) => {
   docsSuppressUntil = Date.now() + 1500;
   invoke('docs_open_outdir').catch(() => {});
 });
+docsBack.addEventListener('click', (e) => {
+  e.stopPropagation();
+  docsBackToHome();
+});
 docsAgain.addEventListener('click', (e) => {
   e.stopPropagation();
+  // 这一批已经清空，再打开应该是首页重新选文件
+  docs.stage = 'choose';
   docs.files = [];
   docs.outputs = [];
   docs.mode = null;
@@ -981,11 +1082,22 @@ try {
     leaveAccept(paths.length > 0);
   });
   ev.listen('docs-staged', async () => {
-    await loadPendingDocs();
-    if (docs.running) return;
-    // 已经选过动作就留在选项页，只把新文件补进列表
-    docs.stage = docs.mode ? 'options' : 'choose';
-    if (docs.mode !== 'convert') docs.target = null;
+    // 这个事件既用于「拖入文件」也用于「重新打开面板」，只有真的带进来新文件时才重置页面：
+    // 否则从菜单/左键再打开时会从完成页被踢回首页。
+    const staged = await loadPendingDocs();
+    if (!docs.running && staged > 0) {
+      if (docs.stage === 'done') {
+        // 停在完成页时又拖进来文件：按「回首页」处理，重新选动作
+        docs.stage = 'choose';
+        docs.mode = null;
+        docs.target = null;
+        docs.outputs = [];
+      } else {
+        // 已经选过动作就留在选项页，只把新文件补进列表
+        docs.stage = docs.mode ? 'options' : 'choose';
+        if (docs.mode !== 'convert') docs.target = null;
+      }
+    }
     renderDocs();
     if (!docs.open) {
       openDocsPanel();
@@ -1028,7 +1140,7 @@ function leaveAccept(keepMood = false) {
 window.__TAURI__.event.listen('docs-mood', (e) => {
   const mood = e.payload;
   if (mood === 'busy') {
-    showMood('21', true); // 处理中：常驻生气表情，避免随机表情打断
+    showMood('32', true); // 处理中：常驻「忙碌」表情，避免随机表情打断
     resetIdleTimer();
   } else if (mood === 'err') {
     showMood('12', false, 2500); // 失落

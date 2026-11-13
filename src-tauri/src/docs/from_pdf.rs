@@ -1,14 +1,16 @@
-// PDF 输出方向：取字后落到 txt / md / html / docx。
+// PDF 输出方向：提取文字写入 txt / md / html；DOCX 使用固定版面转换引擎。
 //
-// 只搬文字，不做版面还原；扫描件（无 ToUnicode / 页面只有图片）会明确报错，
-// 由用户改选「PDF → 图片」方向（后续批次）。
+// 纯文字输出要求可提取文字；DOCX 保留页面位置与可编辑文本。
 
 use std::path::Path;
+
+use tauri::AppHandle;
 
 use super::office_write;
 use super::pdf_extract::{self, PageText};
 use super::pdf_render;
 use super::pptx_write::{self, PageImage};
+use super::sidecar_pdf;
 use super::zip_min::{self, OutEntry};
 
 fn gather(src: &Path, cancelled: &dyn Fn() -> bool) -> Result<Vec<PageText>, String> {
@@ -77,45 +79,24 @@ pub fn to_html(src: &Path, dst: &Path, cancelled: &dyn Fn() -> bool) -> Result<(
     std::fs::write(dst, html).map_err(|e| format!("写入失败: {}", e))
 }
 
-pub fn to_docx(src: &Path, dst: &Path, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
-    let pages = gather(src, cancelled)?;
-    let mut items: Vec<office_write::DocItem> = Vec::new();
-    for page in &pages {
-        for item in &page.items {
-            match item {
-                pdf_extract::PageItem::Line(line) => {
-                    if !line.text.trim().is_empty() {
-                        items.push(office_write::DocItem::Para(line.clone()));
-                    }
-                }
-                pdf_extract::PageItem::Table(table) => {
-                    if !table.rows.is_empty() {
-                        items.push(office_write::DocItem::Table(table.clone()));
-                    }
-                }
-                pdf_extract::PageItem::Image(img) => {
-                    if !img.png.is_empty() {
-                        items.push(office_write::DocItem::Image(img.clone()));
-                    }
-                }
+/// PDF → DOCX：固定页面布局，保留可编辑文字。失败时返回原因，避免静默降级丢失排版。
+pub fn to_docx(
+    src: &Path,
+    dst: &Path,
+    cancelled: &dyn Fn() -> bool,
+    app: &AppHandle,
+    note: &mut Option<String>,
+) -> Result<(), String> {
+    match sidecar_pdf::convert(app, src, dst, cancelled, note) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = std::fs::remove_file(dst);
+            if cancelled() {
+                return Err("已取消".to_string());
             }
+            Err(format!("PDF 转 Word 失败：{}。为避免改变分页和布局，未使用精简转换。", err))
         }
     }
-    // 页眉取第一份有内容的，Word 里所有页共用同一个页眉
-    let header = pages.iter().find_map(|p| p.header.as_ref());
-    let footer = pages.iter().find_map(|p| p.footer.as_ref());
-    if items.is_empty() {
-        // 页面上只有图形没有文字时，退回按行拼一份纯文本
-        let mut markdown = String::new();
-        for page in &pages {
-            for line in &page.lines {
-                markdown.push_str(line);
-                markdown.push('\n');
-            }
-        }
-        return office_write::text_content_to_docx(&markdown, false, dst, cancelled);
-    }
-    office_write::doc_items_to_docx(&items, header, footer, dst, cancelled)
 }
 
 fn encode(page: &[u8], width: usize, height: usize, fmt: &str) -> Result<Vec<u8>, String> {

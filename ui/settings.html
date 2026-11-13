@@ -87,7 +87,7 @@
         <input type="radio" name="lang" value="en" id="langEn"> English
       </label>
     </div>
-    <div class="tip" data-i18n="set.langTip">切换后立即生效，菜单与悬浮球气泡都会跟着换。</div>
+    <div class="tip" data-i18n="set.langTip">点「保存」后生效，菜单与悬浮球气泡都会跟着换。</div>
   </div>
 
   <div class="field">
@@ -157,14 +157,7 @@
       if (cfg.lang === 'en') langEn.checked = true; else langZh.checked = true;
     });
 
-    // 语言单独即时生效：切换即保存，其它窗口收到 config-changed 后同步换文案
-    function onLangChange(value) {
-      window.I18N.setLang(value);
-      window.api.setConfig({ lang: value });
-    }
-    langZh.addEventListener('change', () => { if (langZh.checked) onLangChange('zh'); });
-    langEn.addEventListener('change', () => { if (langEn.checked) onLangChange('en'); });
-
+    // 语言和其它设置一样，只在点「保存」时写入；点关闭则丢弃改动。
     browseBtn.addEventListener('click', async () => {
       const dir = await window.api.pickTempDir();
       if (dir) tempDirInput.value = dir;
@@ -172,6 +165,7 @@
 
     saveBtn.addEventListener('click', async () => {
       await window.api.setConfig({
+        lang: langEn.checked ? 'en' : 'zh',
         tempDir: tempDirInput.value,
         alwaysOnTop: alwaysOnTop.checked,
         closeToTray: closeTray.checked

@@ -23,6 +23,8 @@ url = "2"
 percent-encoding = "2"
 image = { version = "0.25.6", default-features = false, features = ["png", "jpeg", "bmp", "gif", "tiff", "webp"] }
 flate2 = "1"
+sha2 = "0.10"
+hex = "0.4"
 lopdf = "0.36.0"
 encoding_rs = "0.8"
 # 旧版 .doc 是 OLE 复合文档（CFB）容器，需要读流

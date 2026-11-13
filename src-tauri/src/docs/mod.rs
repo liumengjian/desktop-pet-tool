@@ -2,7 +2,9 @@
 //
 // 设计约束（用户拍板）：
 //   - 单文件硬上限 2GB；PDF 超过阈值走流式重写，不整份载入内存；
-//   - 全部能力由本软件纯 Rust 实现，不调用本机 Office / WPS / LibreOffice / Ghostscript；
+//   - 除「PDF→DOCX」外全部能力由本软件纯 Rust 实现，不调用本机 Office / WPS /
+//     LibreOffice / Ghostscript；PDF→DOCX 优先用随包 embeddable Python + pdf2docx
+//     sidecar（binaries/pdfconv），sidecar 缺失 / 失败时回退本目录自研精简链路；
 //   - 输出统一落到「临时文件夹」（与文档复制下载的产物同目录），完成后前端引导打开。
 
 pub mod image_ops;
@@ -15,6 +17,8 @@ pub mod pdf_font;
 pub mod legacy;
 pub mod pptx_write;
 pub mod pdf_render;
+pub mod sidecar_pdf;
+pub mod sidecar_deps;
 pub mod pdf_ops;
 pub mod pdf_stream;
 pub mod pdf_text;
@@ -591,7 +595,7 @@ fn run_job(app: &AppHandle, job: &JobRequest, outdir: &Path) -> Result<DonePaylo
                 "txt" => from_pdf::to_txt(src, &dst, &cancelled),
                 "md" => from_pdf::to_md(src, &dst, &cancelled),
                 "html" => from_pdf::to_html(src, &dst, &cancelled),
-                "docx" => from_pdf::to_docx(src, &dst, &cancelled),
+                "docx" => from_pdf::to_docx(src, &dst, &cancelled, app, &mut extra_note),
                 "xlsx" => from_pdf::to_xlsx(src, &dst, &cancelled),
                 "pptx" => from_pdf::to_pptx(src, &dst, 150.0, &cancelled, &mut extra_note),
                 "jpg" | "png" => {

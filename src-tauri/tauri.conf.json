@@ -34,6 +34,10 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "resources": [
+      "binaries/pdfconv/python/*",
+      "binaries/pdfconv/scripts/*"
+    ],
     "icon": [
       "icons/icon.ico",
       "icons/icon.png"
@@ -41,7 +45,8 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "installerHooks": "./windows/hooks.nsh"
       }
     }
   }

@@ -4,6 +4,10 @@
 // 借助各字体自己的 /ToUnicode CMap 把字形码翻译回 Unicode。
 // 扫描件（页面只有图片、没有文字算子）抽不出字，由调用方按降级处理。
 
+// 这里产出的结构体是给 office_write 的 PDF → DOCX 写出用的，那一段还没接线，
+// 所以一半字段暂时没人读。等写出一侧接上后删掉这一行即可。
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -26,6 +30,8 @@ pub struct HeaderLine {
     pub x: f32,
     pub size: f32,
     pub color: Option<[u8; 3]>,
+    /// PDF 里的 /BaseFont 原始名（可能为空）
+    pub font: String,
 }
 
 /// 页眉/页脚内容：按行组织，每行可能是并排的几段（两家公司抬头这种）
@@ -62,6 +68,8 @@ pub struct BodyImage {
 struct FontMap {
     two_byte: bool,
     map: HashMap<u32, String>,
+    /// PDF 里的 /BaseFont 原始名（可能带子集前缀 ABCDEF+），供 Word 还原字体
+    base_font: String,
 }
 
 /// CMap 词法：hex 串（<> 内）与数组括号
@@ -253,6 +261,12 @@ fn font_map(doc: &Document, font: &lopdf::Dictionary) -> FontMap {
         .unwrap_or_default();
     let two_byte =
         subtype == b"Type0" || encoding == b"Identity-H" || encoding == b"Identity-V";
+    let base_font = font
+        .get(b"BaseFont")
+        .ok()
+        .and_then(|o| o.as_name().ok())
+        .map(|n| String::from_utf8_lossy(n).into_owned())
+        .unwrap_or_default();
 
     let mut map = HashMap::new();
     if let Ok(obj) = font.get(b"ToUnicode") {
@@ -267,7 +281,11 @@ fn font_map(doc: &Document, font: &lopdf::Dictionary) -> FontMap {
             }
         }
     }
-    FontMap { two_byte, map }
+    FontMap {
+        two_byte,
+        map,
+        base_font,
+    }
 }
 
 enum Operand {
@@ -324,6 +342,8 @@ struct Frag {
     text: String,
     /// 文字颜色（RGB）。纯黑不记，省得每个字都带样式
     color: Option<[u8; 3]>,
+    /// /BaseFont 原始名，供 Word 还原字体
+    font: String,
 }
 
 /// 内容流里的矩形（在页面坐标下），用来识别表格框线和单元格底纹
@@ -422,6 +442,7 @@ fn frags_to_lines(mut frags: Vec<Frag>) -> Vec<(f32, LineData)> {
                     x0,
                     x1: end_x,
                     split_at: split_at.map(|s| s.saturating_sub(lead)),
+                    font: frag_font(row),
                 },
             ));
         }
@@ -486,6 +507,8 @@ pub struct LineData {
     /// 行内有一段明显跨栏的空白时，记下后半段起点在 text 里的字符位置，
     /// 写 Word 时在那里插制表符，把右半段推到版面右侧（TO / FM 这种并排抬头）
     pub split_at: Option<usize>,
+    /// PDF 里的 /BaseFont 原始名（可能为空），写 Word 时归一化后透传
+    pub font: String,
 }
 
 /// 表格里的一个单元格
@@ -499,6 +522,8 @@ pub struct Cell {
     pub size: f32,
     /// 这一格横向跨了几列（PDF 里一句长文字跨过列线时，它其实是合并格）
     pub span: usize,
+    /// PDF 里的 /BaseFont 原始名（可能为空）
+    pub font: String,
 }
 
 /// 还原出来的一张表
@@ -562,6 +587,21 @@ fn frag_color(frags: &[Frag]) -> Option<[u8; 3]> {
 
 fn frag_size(frags: &[Frag]) -> f32 {
     frags.iter().map(|f| f.size).fold(0.0f32, f32::max)
+}
+
+/// 取这一组碎片里出现次数最多的非空字体名；全空时返回空串
+fn frag_font(frags: &[Frag]) -> String {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for f in frags {
+        if !f.font.is_empty() {
+            *counts.entry(f.font.clone()).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .max_by_key(|(_, n)| *n)
+        .map(|(name, _)| name)
+        .unwrap_or_default()
 }
 
 /// 用表格框线（PDF 里是细长的填充矩形）还原网格，把文字按单元格归并。
@@ -945,6 +985,7 @@ fn build_items(
                     color: frag_color(cell),
                     size: frag_size(cell),
                     span,
+                    font: frag_font(cell),
                 });
             }
             rows.push(row);
@@ -1431,6 +1472,11 @@ fn run_content(
                                     flip_pos += 1;
                                 }
                                 let adv = est_width(&text, size);
+                                let font_name = active
+                                    .as_ref()
+                                    .and_then(|n| fonts.get(n))
+                                    .map(|f| f.base_font.clone())
+                                    .unwrap_or_default();
                                 frags.push(Frag {
                                     x,
                                     y,
@@ -1443,6 +1489,7 @@ fn run_content(
                                     },
                                     text,
                                     color: if is_black(fill) { None } else { Some(fill) },
+                                    font: font_name,
                                 });
                                 tm = m_mul([1.0, 0.0, 0.0, 1.0, adv, 0.0], tm);
                             }
@@ -1888,6 +1935,7 @@ fn frags_to_bands(frags: Vec<Frag>) -> Vec<Vec<HeaderLine>> {
                     x,
                     size,
                     color,
+                    font: frag_font(&block),
                 });
             }
         }

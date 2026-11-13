@@ -1,0 +1,10 @@
+# 随包 PDF→Word sidecar 依赖锁定版本（Windows amd64, Python 3.13 embeddable）
+# 重建环境：python -m pip install --target <python>/Lib/site-packages -r requirements.txt --no-compile
+pdf2docx==0.5.13
+PyMuPDF==1.26.7
+python-docx==1.2.0
+opencv-python-headless==4.11.0.86
+numpy==2.5.4
+fonttools==4.68.0
+fire==0.7.1
+lxml==6.1.3

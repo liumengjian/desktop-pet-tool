@@ -28,3 +28,17 @@ Thumbs.db
 
 tools/docs-smoke/target
 .preview
+
+# 随包 Python sidecar：embeddable 运行时与 site-packages 依赖按
+# tools/pdf-sidecar/requirements.txt 重建，体积大，不入库；脚本源码保留。
+src-tauri/binaries/pdfconv/python/
+
+# sidecar 环境验证临时产物（site-packages 母本、embed 解压、测试 docx/pdf/json）
+tools/pdf-sidecar/_verify/
+
+# OSS 外置依赖打包产物（zip + sha256），已上传 COS，不入库
+tools/pdf-sidecar/dist/
+
+# Python 缓存
+__pycache__/
+*.pyc

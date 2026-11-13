@@ -23,7 +23,10 @@
   <!-- 文档工具气泡：拖入文件后浮出，转换 / 压缩 → 选项 → 进度 → 完成，全在球边完成 -->
   <div id="docsBubble" class="bubble docs-bubble hidden">
     <div class="bubble-header">
-      <span id="docsTitle" class="bubble-title" data-i18n="docs.title">文档工具</span>
+      <div class="docs-head-left">
+        <button id="docsBack" class="bubble-back hidden" data-i18n-title="docs.back" title="返回">‹</button>
+        <span id="docsTitle" class="bubble-title" data-i18n="docs.title">文档工具</span>
+      </div>
       <button id="docsClose" class="bubble-close" data-i18n-title="common.hide" title="收起">×</button>
     </div>
     <div id="docsBody">
@@ -47,7 +50,7 @@
         <button class="chip" data-level="high" data-i18n="docs.levelHigh">更清晰</button>
       </div>
 
-      <div id="docsHint" class="docs-hint"></div>
+      <!-- <div id="docsHint" class="docs-hint"></div> -->
 
       <div id="docsActions" class="docs-actions">
         <button id="docsPick" class="link-btn" data-i18n="docs.pick">选择文件</button>
