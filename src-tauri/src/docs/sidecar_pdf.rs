@@ -38,7 +38,8 @@ struct SidecarReport {
 }
 
 /// 定位随包 sidecar 根目录；打包后取 resource_dir，开发态从 exe 回溯工程目录。
-fn resolve_root(app: &AppHandle) -> Option<PathBuf> {
+/// 人脸比对 sidecar 与本模块共用同一个随包 Python 运行时，因此公开给 crate 内部复用。
+pub(crate) fn resolve_root(app: &AppHandle) -> Option<PathBuf> {
     // 候选 1：打包安装后的资源目录
     if let Ok(res) = app.path().resource_dir() {
         let cand = res.join(SIDECAR_SUBDIR);

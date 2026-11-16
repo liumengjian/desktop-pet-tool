@@ -68,8 +68,10 @@ async function showMsg(msg, duration = 2200) {
   // 同一时刻只留一个气泡：文档面板开着时先让它退场，消息结束后再原样放回。
   // 三者共用 bottom:100px / right:22px，且窗口尺寸各按自己那套给（224 / 320 / 224 宽），
   // 直接叠着显示就会互相压住、外层还被裁窄。
-  if (docs.open) {
-    bubbleHide(docsBubble);
+  if (docs.open || face.open || wm.open) {
+    if (docs.open) bubbleHide(docsBubble);
+    if (face.open) bubbleHide(faceBubble);
+    if (wm.open) bubbleHide(wmBubble);
     await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
   }
   const box = measureMsg(msg);
@@ -82,6 +84,14 @@ async function showMsg(msg, duration = 2200) {
     if (docs.open) {
       // 面板还开着（例如转换完成时弹的提示）：等消息退场后把窗口和面板交还给它
       setTimeout(() => { if (docs.open) docsLayout(); }, BUBBLE_HIDE_MS);
+      return;
+    }
+    if (face.open) {
+      setTimeout(() => { if (face.open) faceLayout(); }, BUBBLE_HIDE_MS);
+      return;
+    }
+    if (wm.open) {
+      setTimeout(() => { if (wm.open) wmLayout(); }, BUBBLE_HIDE_MS);
       return;
     }
     resizeLater(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
@@ -161,9 +171,11 @@ function resizeLater(w, h, delay = BUBBLE_HIDE_MS) {
 
 async function expand() {
   if (expanded) return;
-  // 文档面板与输入气泡互斥：先把面板收起再展开，否则两块气泡会叠在同一位置
-  if (docs.open) {
-    hideDocsPanel();
+  // 文档面板 / 人脸比对气泡与输入气泡互斥：先把面板收起再展开，否则两块气泡会叠在同一位置
+  if (docs.open || face.open || wm.open) {
+    if (docs.open) hideDocsPanel();
+    if (face.open) hideFacePanel();
+    if (wm.open) hideWmPanel();
     // 等面板退场（200ms）再缩窗口，否则 320 宽的面板会在淡出途中被 264 的窗口裁掉左边一截
     await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
   }
@@ -198,7 +210,7 @@ let downPos = null;
 
 // 可交互元素（输入框/按钮/气泡）不参与拖动
 function isInteractive(el) {
-  return !!el.closest('input, button, .mini-close, #bubble, #docsBubble, #msgBubble');
+  return !!el.closest('input, button, .mini-close, #bubble, #docsBubble, #faceBubble, #wmBubble, #msgBubble');
 }
 
 document.addEventListener('mousedown', (e) => {
@@ -236,15 +248,20 @@ document.addEventListener('mouseup', (e) => {
       // 还没用过任何工具时保持原行为——把已展开的气泡收起。
       const closePanels = () => {
         if (docs.open) hideDocsPanel();
+        if (face.open) hideFacePanel();
+        if (wm.open) hideWmPanel();
         if (expanded) collapse();
       };
       window.api.openLastTool()
         .then((opened) => { if (!opened) closePanels(); })
         .catch(closePanels);
-    } else if (!e.target.closest('#bubble') && !e.target.closest('#docsBubble') && !e.target.closest('#msgBubble')) {
+    } else if (!e.target.closest('#bubble') && !e.target.closest('#docsBubble')
+      && !e.target.closest('#faceBubble') && !e.target.closest('#wmBubble') && !e.target.closest('#msgBubble')) {
       // 点击窗口内空白（气泡以外）→ 收起气泡与文档面板
       if (expanded) collapse();
       if (docs.open) hideDocsPanel();
+      if (face.open) hideFacePanel();
+      if (wm.open) hideWmPanel();
     }
   }
 });
@@ -263,6 +280,13 @@ btn.addEventListener('contextmenu', (e) => {
   window.api.openContextMenu();
 });
 
+// 气泡面板内右键屏蔽：不弹浏览器默认菜单，也不打开工具菜单；悬浮球主体的右键菜单不受影响
+document.addEventListener('contextmenu', (e) => {
+  if (e.target.closest('.bubble')) {
+    e.preventDefault();
+  }
+});
+
 // 右上角关闭按钮：退出或最小化到托盘（由设置决定）
 miniClose.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -275,11 +299,13 @@ bubbleClose.addEventListener('click', (e) => {
   collapse();
 });
 
-// Esc 收起输入气泡 / 文档面板
+// Esc 收起输入气泡 / 文档面板 / 人脸比对气泡
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (expanded) collapse();
   if (docs.open) hideDocsPanel();
+  if (face.open) hideFacePanel();
+  if (wm.open) hideWmPanel();
 });
 
 // ===== 随机表情池 =====
@@ -494,8 +520,12 @@ window.api.onToast((msg) => showMsg(msg));
 window.api.onOutsideClick(() => {
   // 正在系统文件选择框里操作：那不是「点空白收起」，不能收面板
   if (docsPickerOpen || Date.now() < docsSuppressUntil) return;
+  if (facePickerOpen || Date.now() < faceSuppressUntil) return;
+  if (wmPickerOpen || Date.now() < wmSuppressUntil) return;
   if (expanded) collapse();
   if (docs.open) hideDocsPanel();
+  if (face.open) hideFacePanel();
+  if (wm.open) hideWmPanel();
 });
 
 // 所有声明就绪后启动空闲睡觉计时（2 分钟无点击触发睡觉）
@@ -514,6 +544,8 @@ function applyLang(lang) {
   if (window.I18N.lang === next) return;
   window.I18N.setLang(next);
   if (docs.open) { renderDocs(); docsLayout(); }
+  if (face.open) { renderFace(); faceLayout(); }
+  if (wm.open) { renderWm(); wmLayout(); }
 }
 
 async function loadLangFromConfig() {
@@ -526,6 +558,8 @@ async function loadLangFromConfig() {
   }
   window.I18N.setLang(lang);
   if (docs.open) { renderDocs(); docsLayout(); }
+  if (face.open) { renderFace(); faceLayout(); }
+  if (wm.open) { renderWm(); wmLayout(); }
 }
 
 try {
@@ -1111,6 +1145,858 @@ try {
   console.error('拖拽/文档事件监听注册失败', err);
 }
 
+// ===== 人脸比对：两组照片（证件照 / 自拍）跨组一一对应 → Word（每页一对） =====
+// 与文档工具同一套气泡范式：选图 → 运行进度 → 完成，全程在球边完成。
+// 推理放在随包 Python sidecar（模型首次使用才下载），这里只管交互与进度。
+
+const faceBubble = document.getElementById('faceBubble');
+const faceTitle = document.getElementById('faceTitle');
+const faceBack = document.getElementById('faceBack');
+const faceClose = document.getElementById('faceClose');
+const faceGroups = document.getElementById('faceGroups');
+const faceListA = document.getElementById('faceListA');
+const faceListB = document.getElementById('faceListB');
+const faceCountA = document.getElementById('faceCountA');
+const faceCountB = document.getElementById('faceCountB');
+const facePickA = document.getElementById('facePickA');
+const facePickB = document.getElementById('facePickB');
+const faceHint = document.getElementById('faceHint');
+const faceActions = document.getElementById('faceActions');
+const faceStart = document.getElementById('faceStart');
+const faceRun = document.getElementById('faceRun');
+const faceRunName = document.getElementById('faceRunName');
+const faceRunFill = document.getElementById('faceRunFill');
+const faceRunLabel = document.getElementById('faceRunLabel');
+const faceRunPct = document.getElementById('faceRunPct');
+const faceCancel = document.getElementById('faceCancel');
+const faceDone = document.getElementById('faceDone');
+const faceDoneMsg = document.getElementById('faceDoneMsg');
+const faceResults = document.getElementById('faceResults');
+const faceOpenDir = document.getElementById('faceOpenDir');
+const faceAgain = document.getElementById('faceAgain');
+
+const FACE_W = 380;              // 气泡 340 + 左右各 20，与文档面板同一套边距
+const FACE_MAX_H = 508;          // 主窗口 620，扣掉气泡 100px 底部偏移与顶部留白
+
+const face = {
+  open: false,
+  stage: 'choose',   // choose | running | done
+  a: [],             // 第一组（签证照）：[{ path, name, sizeLabel }]
+  b: [],             // 第二组（自拍照）
+  running: false,
+  outputs: [],
+  needModel: false,  // 本地还没缓存模型：面板上提前说明会下载
+};
+
+let facePickerOpen = false;      // 系统选图框开着：期间任何点击都不是「点空白收起」
+let faceSuppressUntil = 0;       // 资源管理器等独立窗口刚打开，短暂屏蔽外部点击
+let faceQuietTimer = 0;
+
+async function faceLayout() {
+  clearTimeout(faceBubble._hideTimer);
+  faceBubble.classList.remove('closing', 'hidden');
+  const h = Math.min(FACE_MAX_H, Math.max(160, faceBubble.offsetHeight));
+  await resizeNow(FACE_W, Math.round(h + 112));
+  requestAnimationFrame(() => {
+    if (face.open) bubbleShow(faceBubble);
+  });
+}
+
+async function refreshFaceModelState() {
+  try {
+    const info = await invoke('face_status');
+    // [ready, cacheRoot]
+    face.needModel = !(Array.isArray(info) ? info[0] : info);
+  } catch (err) {
+    face.needModel = false;
+  }
+}
+
+async function openFacePanel() {
+  if (expanded) collapse();
+  // 文档面板 / 消息气泡与它互斥：同一位置只能有一块气泡
+  if (docs.open) {
+    hideDocsPanel();
+    await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
+  }
+  if (!msgBubble.classList.contains('hidden')) bubbleHide(msgBubble);
+  face.open = true;
+  if (face.stage !== 'done' && face.stage !== 'running') face.stage = 'choose';
+  await refreshFaceModelState();
+  renderFace();
+  await faceLayout();
+}
+
+function hideFacePanel() {
+  if (!face.open) return;
+  face.open = false;
+  bubbleHide(faceBubble);
+  // 任务仍在跑时球上还挂着进度环，收起到 112×112 刚好装得下
+  resizeLater(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
+}
+
+function renderFaceList(el, items, which) {
+  el.innerHTML = '';
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'face-list-empty';
+    empty.textContent = T('face.groupEmpty');
+    el.appendChild(empty);
+    return;
+  }
+  items.forEach((f, idx) => {
+    const row = document.createElement('div');
+    row.className = 'docs-file-row';
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = f.name;
+    name.title = f.path;
+
+    const size = document.createElement('span');
+    size.className = 'size';
+    size.textContent = f.sizeLabel;
+
+    const remove = document.createElement('button');
+    remove.className = 'remove';
+    remove.textContent = '×';
+    remove.title = T('docs.remove');
+    remove.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (face.running) return;
+      items.splice(idx, 1);
+      renderFace();
+      faceLayout();
+    });
+
+    row.append(name, size, remove);
+    el.appendChild(row);
+  });
+}
+
+function renderFace() {
+  const onDonePage = face.stage === 'done';
+  const showChoices = face.stage === 'choose';
+
+  renderFaceList(faceListA, face.a, 'a');
+  renderFaceList(faceListB, face.b, 'b');
+  faceCountA.textContent = String(face.a.length);
+  faceCountB.textContent = String(face.b.length);
+
+  faceGroups.classList.toggle('hidden', !showChoices);
+  faceHint.classList.toggle('hidden', !showChoices);
+  faceActions.classList.toggle('hidden', !showChoices);
+  faceRun.classList.toggle('hidden', face.stage !== 'running');
+  faceDone.classList.toggle('hidden', !onDonePage);
+  faceBack.classList.toggle('hidden', !onDonePage);
+
+  faceStart.disabled = face.running || !face.a.length || !face.b.length;
+  faceTitle.textContent = T('face.title');
+
+  if (showChoices) {
+    if (face.needModel) {
+      faceHint.textContent = T('face.hintNeedModel');
+    } else if (!face.a.length && !face.b.length) {
+      faceHint.textContent = T('face.hintEmpty');
+    } else if (!face.a.length || !face.b.length) {
+      faceHint.textContent = T('face.hintOneGroup');
+    } else {
+      faceHint.textContent = T('face.hintReady', { a: face.a.length, b: face.b.length });
+    }
+  }
+}
+
+async function pickFaceGroup(which) {
+  facePickerOpen = true;
+  try {
+    const picked = await invoke('face_pick_group');
+    if (!Array.isArray(picked) || !picked.length) {
+      // 取消选择也要保证面板还在
+      face.open = true;
+      renderFace();
+      await faceLayout();
+      return;
+    }
+    const list = which === 'a' ? face.a : face.b;
+    let added = 0;
+    picked.forEach((f) => {
+      if (!f || !f.ok) return;                 // 选了非图片：静默忽略
+      if (list.some((x) => x.path === f.path)) return;
+      list.push({ path: f.path, name: f.name, sizeLabel: f.sizeLabel });
+      added += 1;
+    });
+    face.open = true;
+    face.stage = 'choose';
+    renderFace();
+    if (!added && picked.length) {
+      faceHint.textContent = T('face.notImage');
+    }
+    await faceLayout();
+  } catch (err) {
+    face.open = true;
+    faceHint.textContent = T('face.pickFailed', { err });
+    faceHint.classList.remove('hidden');
+    renderFace();
+    await faceLayout();
+  } finally {
+    facePickerOpen = false;
+  }
+}
+
+function armFaceQuiet() {
+  clearTimeout(faceQuietTimer);
+  faceQuietTimer = setTimeout(() => {
+    if (!face.running) return;
+    faceRunFill.classList.add('is-indeterminate');
+    faceRunPct.textContent = T('docs.working');
+  }, 1200);
+}
+
+function disarmFaceQuiet() {
+  clearTimeout(faceQuietTimer);
+  faceQuietTimer = 0;
+  faceRunFill.classList.remove('is-indeterminate');
+}
+
+async function startFaceJob() {
+  if (face.running || !face.a.length || !face.b.length) return;
+  face.running = true;
+  face.stage = 'running';
+  face.outputs = [];
+  faceRunName.textContent = '';
+  faceRunLabel.textContent = T('face.runStart');
+  faceRunPct.textContent = '0%';
+  faceRunFill.style.width = '0%';
+  disarmFaceQuiet();
+  armFaceQuiet();
+  renderFace();
+  await faceLayout();
+  showRing(0);
+
+  try {
+    await invoke('face_start', {
+      job: {
+        groupA: face.a.map((f) => f.path),
+        groupB: face.b.map((f) => f.path),
+      },
+    });
+  } catch (err) {
+    face.running = false;
+    hideRing();
+    onFaceDone({ ok: false, message: String(err), outdir: '', outputs: [] });
+  }
+}
+
+function onFaceProgress(payload) {
+  if (!payload || !face.running) return;
+  const pct = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+  disarmFaceQuiet();
+  faceRunFill.style.width = `${pct}%`;
+  faceRunPct.textContent = `${Math.round(pct)}%`;
+  armFaceQuiet();
+  if (payload.name) faceRunName.textContent = payload.name;
+  if (payload.label) faceRunLabel.textContent = payload.label;
+  updateRing(pct);
+}
+
+function onFaceDone(payload) {
+  const ok = !!(payload && payload.ok);
+  face.running = false;
+  disarmFaceQuiet();
+  hideRing();
+  face.outputs = (payload && payload.outputs) || [];
+  face.stage = 'done';
+
+  faceDoneMsg.textContent = (payload && payload.message) || T(ok ? 'docs.successStatus' : 'face.failed');
+  faceDoneMsg.className = 'docs-done-msg' + (ok ? '' : ' err');
+
+  faceResults.innerHTML = '';
+  face.outputs.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'docs-result-row';
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = item.name;
+    name.title = item.path;
+
+    const note = document.createElement('span');
+    note.className = 'delta';
+    note.textContent = item.note || '';
+
+    row.append(name, note);
+    faceResults.appendChild(row);
+  });
+  faceOpenDir.disabled = !ok;
+
+  // 成功：这批照片已经用掉，下一位客户从空列表开始；失败保留列表，方便原地重试
+  if (ok) {
+    face.a = [];
+    face.b = [];
+    refreshFaceModelState();
+  }
+
+  // 用户中途把气泡收了：只在球边提示一句，不强行弹回面板
+  if (!face.open) {
+    const pairs = (payload && payload.summary && payload.summary.pairs) || 0;
+    showMsg(ok ? T('face.doneToast', { n: pairs }) : T('face.failedToast'), 2600);
+    return;
+  }
+  renderFace();
+  faceLayout();
+}
+
+facePickA.addEventListener('click', (e) => { e.stopPropagation(); pickFaceGroup('a'); });
+facePickB.addEventListener('click', (e) => { e.stopPropagation(); pickFaceGroup('b'); });
+faceStart.addEventListener('click', (e) => { e.stopPropagation(); startFaceJob(); });
+faceCancel.addEventListener('click', (e) => {
+  e.stopPropagation();
+  invoke('face_cancel').catch(() => {});
+  faceRunLabel.textContent = T('face.canceling');
+});
+faceOpenDir.addEventListener('click', (e) => {
+  e.stopPropagation();
+  // 资源管理器是独立窗口，点进去的瞬间别把面板收掉
+  faceSuppressUntil = Date.now() + 1500;
+  invoke('face_open_outdir').catch(() => {});
+});
+faceBack.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (face.running) return;
+  face.stage = 'choose';
+  face.outputs = [];
+  refreshFaceModelState();
+  renderFace();
+  faceLayout();
+});
+faceAgain.addEventListener('click', (e) => {
+  e.stopPropagation();
+  face.stage = 'choose';
+  face.a = [];
+  face.b = [];
+  face.outputs = [];
+  hideFacePanel();
+});
+faceClose.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (face.running) invoke('face_cancel').catch(() => {});
+  hideFacePanel();
+});
+
+try {
+  window.__TAURI__.event.listen('face-open', () => { openFacePanel(); });
+  window.__TAURI__.event.listen('face-progress', (e) => onFaceProgress(e.payload));
+  window.__TAURI__.event.listen('face-done', (e) => onFaceDone(e.payload));
+} catch (err) {
+  console.error('人脸比对事件监听注册失败', err);
+}
+
+// ===== 图片水印去除：选图 → 画笔 / 框选 mask → 模型修复 =====
+const wmBubble = document.getElementById('wmBubble');
+const wmTitle = document.getElementById('wmTitle');
+const wmBack = document.getElementById('wmBack');
+const wmClose = document.getElementById('wmClose');
+const wmPickRow = document.getElementById('wmPickRow');
+const wmFile = document.getElementById('wmFile');
+const wmEditor = document.getElementById('wmEditor');
+const wmBrush = document.getElementById('wmBrush');
+const wmRect = document.getElementById('wmRect');
+const wmRadius = document.getElementById('wmRadius');
+const wmUndo = document.getElementById('wmUndo');
+const wmClear = document.getElementById('wmClear');
+const wmCanvasWrap = document.getElementById('wmCanvasWrap');
+const wmImgCanvas = document.getElementById('wmImgCanvas');
+const wmMarkCanvas = document.getElementById('wmMarkCanvas');
+const wmHint = document.getElementById('wmHint');
+const wmActions = document.getElementById('wmActions');
+const wmStart = document.getElementById('wmStart');
+const wmRun = document.getElementById('wmRun');
+const wmRunName = document.getElementById('wmRunName');
+const wmRunFill = document.getElementById('wmRunFill');
+const wmRunLabel = document.getElementById('wmRunLabel');
+const wmRunPct = document.getElementById('wmRunPct');
+const wmCancel = document.getElementById('wmCancel');
+const wmDone = document.getElementById('wmDone');
+const wmDoneMsg = document.getElementById('wmDoneMsg');
+const wmResults = document.getElementById('wmResults');
+const wmOpenDir = document.getElementById('wmOpenDir');
+const wmAgain = document.getElementById('wmAgain');
+
+const WM_W = 420;  // 窗口宽；气泡 380 + 左右边距 40，与文档/人脸同一套边距
+const WM_MAX_H = 508;
+
+const wm = {
+  open: false,
+  stage: 'choose', // choose | running | done
+  image: null,     // { path, name, sizeLabel, dataUrl, origW, origH, w, h }
+  strokes: [],     // 缩略图坐标：[{ kind, points, radius, rect }]
+  running: false,
+  outputs: [],
+  needModel: false,
+  tool: 'brush',
+  brushRadius: 12,
+  drawing: false,
+  current: null,    // 正在画的一笔 / 框选预览
+  zoom: 1,          // 相对基准尺寸的缩放倍数
+  baseW: 0,         // contain 适配容器后的基准显示宽（CSS px）
+  baseH: 0,         // 基准显示高（CSS px）
+};
+
+let wmPickerOpen = false;
+let wmSuppressUntil = 0;
+let wmQuietTimer = 0;
+
+async function wmLayout() {
+  clearTimeout(wmBubble._hideTimer);
+  wmBubble.classList.remove('closing', 'hidden');
+  const h = Math.min(WM_MAX_H, Math.max(160, wmBubble.offsetHeight));
+  await resizeNow(WM_W, Math.round(h + 112));
+  requestAnimationFrame(() => {
+    if (wm.open) bubbleShow(wmBubble);
+  });
+}
+
+async function refreshWmModelState() {
+  try {
+    const info = await invoke('wm_status');
+    wm.needModel = !(Array.isArray(info) ? info[0] : info);
+  } catch (err) {
+    wm.needModel = false;
+  }
+}
+
+async function openWmPanel() {
+  if (expanded) collapse();
+  if (docs.open) {
+    hideDocsPanel();
+    await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
+  }
+  if (face.open) {
+    hideFacePanel();
+    await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
+  }
+  if (!msgBubble.classList.contains('hidden')) bubbleHide(msgBubble);
+  wm.open = true;
+  if (wm.stage !== 'done' && wm.stage !== 'running') wm.stage = 'choose';
+  await refreshWmModelState();
+  renderWm();
+  await wmLayout();
+}
+
+function hideWmPanel() {
+  if (!wm.open) return;
+  wm.open = false;
+  bubbleHide(wmBubble);
+  resizeLater(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
+}
+
+function wmCanvasPoint(e) {
+  const rect = wmMarkCanvas.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width) * wmMarkCanvas.width;
+  const y = ((e.clientY - rect.top) / rect.height) * wmMarkCanvas.height;
+  return [Math.round(x), Math.round(y)];
+}
+
+function applyWmZoom() {
+  if (!wm.baseW || !wm.baseH) return;
+  const w = wm.baseW * wm.zoom;
+  const h = wm.baseH * wm.zoom;
+  wmImgCanvas.style.width = w + 'px';
+  wmImgCanvas.style.height = h + 'px';
+  wmMarkCanvas.style.width = w + 'px';
+  wmMarkCanvas.style.height = h + 'px';
+}
+
+// 光标停留在画布区域内：滚轮放大 / 缩小图片，范围 0.4 ~ 4 倍
+wmCanvasWrap.addEventListener('wheel', (e) => {
+  if (!wm.image) return;
+  e.preventDefault();
+  const next = wm.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12);
+  wm.zoom = Math.min(4, Math.max(0.4, next));
+  applyWmZoom();
+}, { passive: false });
+
+function redrawMark() {
+  const ctx = wmMarkCanvas.getContext('2d');
+  ctx.clearRect(0, 0, wmMarkCanvas.width, wmMarkCanvas.height);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  const drawStroke = (s) => {
+    if (s.kind === 'brush') {
+      ctx.strokeStyle = 'rgba(217, 83, 79, 0.55)';
+      ctx.fillStyle = 'rgba(217, 83, 79, 0.55)';
+      ctx.lineWidth = s.radius;
+      const pts = s.points;
+      if (pts.length === 1) {
+        ctx.beginPath();
+        ctx.arc(pts[0][0], pts[0][1], s.radius / 2, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.stroke();
+      }
+    } else if (s.kind === 'rect' && s.rect.length === 4) {
+      const [x1, y1, x2, y2] = s.rect;
+      ctx.fillStyle = 'rgba(217, 83, 79, 0.30)';
+      ctx.strokeStyle = 'rgba(217, 83, 79, 0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    }
+  };
+  wm.strokes.forEach(drawStroke);
+  if (wm.current) drawStroke(wm.current);
+}
+
+function loadWmImage(info) {
+  wm.image = info;
+  wm.strokes = [];
+  wm.current = null;
+  if (!info || !info.dataUrl || !info.w || !info.h) {
+    console.error('wm thumbnail invalid', info);
+    wmHint.textContent = T('wm.notImage');
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    wmImgCanvas.width = info.w;
+    wmImgCanvas.height = info.h;
+    wmMarkCanvas.width = info.w;
+    wmMarkCanvas.height = info.h;
+    const ictx = wmImgCanvas.getContext('2d');
+    ictx.drawImage(img, 0, 0, info.w, info.h);
+    // 按容器可用空间 contain 出基准显示尺寸，再由缩放倍数叠加
+    const availW = Math.max(80, wmCanvasWrap.clientWidth - 4);
+    const availH = Math.max(80, wmCanvasWrap.clientHeight - 4);
+    const factor = Math.min(availW / info.w, availH / info.h, 1);
+    wm.baseW = info.w * factor;
+    wm.baseH = info.h * factor;
+    wm.zoom = 1;
+    applyWmZoom();
+    redrawMark();
+  };
+  img.onerror = () => {
+    console.error('wm thumbnail decode failed');
+    wmHint.textContent = T('wm.notImage');
+  };
+  img.src = info.dataUrl;
+}
+
+function renderWm() {
+  const onDone = wm.stage === 'done';
+  const showChoices = wm.stage === 'choose';
+
+  wmPickRow.classList.toggle('hidden', !showChoices);
+  wmEditor.classList.toggle('hidden', !showChoices || !wm.image);
+  wmHint.classList.toggle('hidden', !showChoices);
+  wmActions.classList.toggle('hidden', !showChoices);
+  wmRun.classList.toggle('hidden', wm.stage !== 'running');
+  wmDone.classList.toggle('hidden', !onDone);
+  wmBack.classList.toggle('hidden', !onDone);
+
+  wmBrush.classList.toggle('active', wm.tool === 'brush');
+  wmRect.classList.toggle('active', wm.tool === 'rect');
+  wmRadius.disabled = wm.tool !== 'brush';
+
+  wmFile.textContent = wm.image ? wm.image.name : '';
+  wmStart.disabled = wm.running || !wm.image || wm.strokes.length === 0;
+  wmTitle.textContent = T('wm.title');
+
+  if (showChoices) {
+    if (wm.needModel) {
+      wmHint.textContent = T('wm.hintNeedModel');
+    } else if (!wm.image) {
+      wmHint.textContent = T('wm.hintEmpty');
+    } else if (wm.strokes.length === 0) {
+      wmHint.textContent = T('wm.hintReady');
+    } else {
+      wmHint.textContent = T('wm.hintReady');
+    }
+  }
+}
+
+async function pickWmImage() {
+  wmPickerOpen = true;
+  try {
+    const picked = await invoke('wm_pick');
+    if (!Array.isArray(picked) || !picked.length) {
+      wm.open = true;
+      renderWm();
+      await wmLayout();
+      return;
+    }
+    const item = picked.find((f) => f && f.ok);
+    if (!item) {
+      wmHint.textContent = T('wm.notImage');
+      return;
+    }
+    const info = await invoke('wm_thumbnail', { path: item.path });
+    wm.image = {
+      path: item.path,
+      name: item.name,
+      sizeLabel: item.sizeLabel,
+      dataUrl: info.dataUrl,
+      origW: info.origW,
+      origH: info.origH,
+      w: info.w,
+      h: info.h,
+    };
+    loadWmImage(wm.image);
+    wm.stage = 'choose';
+    renderWm();
+    await wmLayout();
+  } catch (err) {
+    wm.open = true;
+    wmHint.textContent = T('wm.pickFailed', { err });
+    renderWm();
+    await wmLayout();
+  } finally {
+    wmPickerOpen = false;
+  }
+}
+
+function armWmQuiet() {
+  clearTimeout(wmQuietTimer);
+  wmQuietTimer = setTimeout(() => {
+    if (!wm.running) return;
+    wmRunFill.classList.add('is-indeterminate');
+    wmRunPct.textContent = T('docs.working');
+  }, 1200);
+}
+
+function disarmWmQuiet() {
+  clearTimeout(wmQuietTimer);
+  wmQuietTimer = 0;
+  wmRunFill.classList.remove('is-indeterminate');
+}
+
+function submitStrokes() {
+  if (!wm.image) return [];
+  const sx = wm.image.origW / wm.image.w;
+  const sy = wm.image.origH / wm.image.h;
+  return wm.strokes.map((s) => {
+    if (s.kind === 'brush') {
+      return {
+        kind: 'brush',
+        radius: Math.max(1, Math.round(s.radius * sx)),
+        points: s.points.map((p) => [Math.round(p[0] * sx), Math.round(p[1] * sy)]),
+      };
+    }
+    const [x1, y1, x2, y2] = s.rect;
+    return {
+      kind: 'rect',
+      radius: 0,
+      rect: [Math.round(x1 * sx), Math.round(y1 * sy), Math.round(x2 * sx), Math.round(y2 * sy)],
+      points: [],
+    };
+  });
+}
+
+async function startWmJob() {
+  if (wm.running || !wm.image || wm.strokes.length === 0) return;
+  wm.running = true;
+  wm.stage = 'running';
+  wm.outputs = [];
+  wmRunName.textContent = '';
+  wmRunLabel.textContent = T('wm.runStart');
+  wmRunPct.textContent = '0%';
+  wmRunFill.style.width = '0%';
+  disarmWmQuiet();
+  armWmQuiet();
+  renderWm();
+  await wmLayout();
+  showRing(0);
+
+  try {
+    await invoke('wm_start', {
+      job: { image: wm.image.path, strokes: submitStrokes() },
+    });
+  } catch (err) {
+    wm.running = false;
+    hideRing();
+    onWmDone({ ok: false, message: String(err), outdir: '', outputs: [] });
+  }
+}
+
+function onWmProgress(payload) {
+  if (!payload || !wm.running) return;
+  const pct = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+  disarmWmQuiet();
+  wmRunFill.style.width = `${pct}%`;
+  wmRunPct.textContent = `${Math.round(pct)}%`;
+  armWmQuiet();
+  if (payload.name) wmRunName.textContent = payload.name;
+  if (payload.label) wmRunLabel.textContent = payload.label;
+  updateRing(pct);
+}
+
+function onWmDone(payload) {
+  const ok = !!(payload && payload.ok);
+  wm.running = false;
+  disarmWmQuiet();
+  hideRing();
+  wm.outputs = (payload && payload.outputs) || [];
+  wm.stage = 'done';
+
+  wmDoneMsg.textContent = (payload && payload.message) || T(ok ? 'docs.successStatus' : 'wm.failed');
+  wmDoneMsg.className = 'docs-done-msg' + (ok ? '' : ' err');
+
+  wmResults.innerHTML = '';
+  wm.outputs.forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'docs-result-row';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = item.name;
+    name.title = item.path;
+    const note = document.createElement('span');
+    note.className = 'delta';
+    note.textContent = item.note || '';
+    row.append(name, note);
+    wmResults.appendChild(row);
+  });
+  wmOpenDir.disabled = !ok;
+
+  if (ok) {
+    wm.image = null;
+    wm.strokes = [];
+    refreshWmModelState();
+  }
+
+  if (!wm.open) {
+    showMsg(ok ? T('wm.doneToast') : T('wm.failedToast'), 2600);
+    return;
+  }
+  renderWm();
+  wmLayout();
+}
+
+// 画布指针交互
+wmMarkCanvas.addEventListener('pointerdown', (e) => {
+  if (!wm.image || wm.running) return;
+  e.preventDefault();
+  wmMarkCanvas.setPointerCapture(e.pointerId);
+  const [x, y] = wmCanvasPoint(e);
+  if (wm.tool === 'brush') {
+    wm.drawing = true;
+    wm.current = { kind: 'brush', points: [[x, y]], radius: wm.brushRadius };
+  } else {
+    wm.drawing = true;
+    wm.current = { kind: 'rect', points: [], radius: 0, rect: [x, y, x, y] };
+  }
+  redrawMark();
+});
+
+wmMarkCanvas.addEventListener('pointermove', (e) => {
+  if (!wm.drawing || !wm.current) return;
+  const [x, y] = wmCanvasPoint(e);
+  if (wm.current.kind === 'brush') {
+    wm.current.points.push([x, y]);
+  } else {
+    wm.current.rect[2] = x;
+    wm.current.rect[3] = y;
+  }
+  redrawMark();
+});
+
+function endWmStroke() {
+  if (!wm.drawing || !wm.current) return;
+  if (wm.current.kind === 'brush') {
+    if (wm.current.points.length > 0) wm.strokes.push(wm.current);
+  } else {
+    const [x1, y1, x2, y2] = wm.current.rect;
+    if (Math.abs(x2 - x1) > 2 || Math.abs(y2 - y1) > 2) {
+      wm.current.rect = [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
+      wm.strokes.push(wm.current);
+    }
+  }
+  wm.drawing = false;
+  wm.current = null;
+  redrawMark();
+  renderWm();
+}
+
+wmMarkCanvas.addEventListener('pointerup', endWmStroke);
+wmMarkCanvas.addEventListener('pointercancel', endWmStroke);
+
+wmBrush.addEventListener('click', (e) => {
+  e.stopPropagation();
+  wm.tool = 'brush';
+  renderWm();
+});
+wmRect.addEventListener('click', (e) => {
+  e.stopPropagation();
+  wm.tool = 'rect';
+  renderWm();
+});
+wmRadius.addEventListener('input', () => {
+  wm.brushRadius = Number(wmRadius.value) || 12;
+});
+wmUndo.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (wm.running) return;
+  wm.strokes.pop();
+  redrawMark();
+  renderWm();
+});
+wmClear.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (wm.running) return;
+  wm.strokes = [];
+  redrawMark();
+  renderWm();
+});
+wmPickRow.querySelector('#wmPick').addEventListener('click', (e) => {
+  e.stopPropagation();
+  pickWmImage();
+});
+wmStart.addEventListener('click', (e) => {
+  e.stopPropagation();
+  startWmJob();
+});
+wmCancel.addEventListener('click', (e) => {
+  e.stopPropagation();
+  invoke('wm_cancel').catch(() => {});
+  wmRunLabel.textContent = T('wm.canceling');
+});
+wmOpenDir.addEventListener('click', (e) => {
+  e.stopPropagation();
+  wmSuppressUntil = Date.now() + 1500;
+  invoke('wm_open_outdir').catch(() => {});
+});
+wmBack.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (wm.running) return;
+  wm.stage = 'choose';
+  wm.outputs = [];
+  refreshWmModelState();
+  renderWm();
+  wmLayout();
+});
+wmAgain.addEventListener('click', (e) => {
+  e.stopPropagation();
+  wm.stage = 'choose';
+  wm.image = null;
+  wm.strokes = [];
+  wm.outputs = [];
+  hideWmPanel();
+});
+wmClose.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (wm.running) invoke('wm_cancel').catch(() => {});
+  hideWmPanel();
+});
+
+try {
+  window.__TAURI__.event.listen('wm-open', () => { openWmPanel(); });
+  window.__TAURI__.event.listen('wm-progress', (e) => onWmProgress(e.payload));
+  window.__TAURI__.event.listen('wm-done', (e) => onWmDone(e.payload));
+} catch (err) {
+  console.error('水印去除事件监听注册失败', err);
+}
+
 let dragAccepting = false;
 
 function enterAccept() {
@@ -1152,5 +2038,4 @@ window.__TAURI__.event.listen('docs-mood', (e) => {
 
 // 所有函数声明完成后按配置落定界面语言（默认中文）
 loadLangFromConfig();
-
 

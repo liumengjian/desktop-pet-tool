@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -75,6 +75,121 @@
         <div class="docs-actions">
           <button id="docsOpenDir" class="secondary-btn" data-i18n="docs.openDir">打开临时文件夹</button>
           <button id="docsAgain" class="primary-btn" data-i18n="docs.again">完成</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 人脸比对气泡：两组照片各上传多张 → 跨组一一对应 → Word（每页一对） -->
+  <div id="faceBubble" class="bubble face-bubble hidden">
+    <div class="bubble-header">
+      <div class="docs-head-left">
+        <button id="faceBack" class="bubble-back hidden" data-i18n-title="face.back" title="返回">‹</button>
+        <span id="faceTitle" class="bubble-title" data-i18n="face.title">人脸比对</span>
+      </div>
+      <button id="faceClose" class="bubble-close" data-i18n-title="common.hide" title="收起">×</button>
+    </div>
+    <div id="faceBody">
+      <div id="faceGroups">
+        <div class="face-group">
+          <div class="face-group-head">
+            <span class="face-group-name" data-i18n="face.groupA">第一组</span>
+            <span id="faceCountA" class="face-count">0</span>
+            <button id="facePickA" class="link-btn" data-i18n="face.pick">选择照片</button>
+          </div>
+          <div id="faceListA" class="face-list"></div>
+        </div>
+        <div class="face-group">
+          <div class="face-group-head">
+            <span class="face-group-name" data-i18n="face.groupB">第二组</span>
+            <span id="faceCountB" class="face-count">0</span>
+            <button id="facePickB" class="link-btn" data-i18n="face.pick">选择照片</button>
+          </div>
+          <div id="faceListB" class="face-list"></div>
+        </div>
+      </div>
+      <div id="faceHint" class="docs-hint"></div>
+      <div id="faceActions" class="docs-actions">
+        <span></span>
+        <button id="faceStart" class="primary-btn" data-i18n="face.start" disabled>开始比对</button>
+      </div>
+
+      <div id="faceRun" class="hidden">
+        <div id="faceRunName" class="docs-run-name"></div>
+        <div class="progress-bar"><div id="faceRunFill" class="progress-fill"></div></div>
+        <div class="docs-run-row">
+          <span id="faceRunLabel"></span>
+          <span id="faceRunPct">0%</span>
+        </div>
+        <div class="docs-actions">
+          <button id="faceCancel" class="link-btn" data-i18n="common.cancel">取消</button>
+        </div>
+      </div>
+
+      <div id="faceDone" class="hidden">
+        <div id="faceDoneMsg" class="docs-done-msg"></div>
+        <div id="faceResults" class="docs-results"></div>
+        <div class="docs-actions">
+          <button id="faceOpenDir" class="secondary-btn" data-i18n="face.openDir">打开临时文件夹</button>
+          <button id="faceAgain" class="primary-btn" data-i18n="face.again">完成</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 图片水印去除气泡：选图 → 画笔 / 框选 mask → 模型修复 -->
+  <div id="wmBubble" class="bubble wm-bubble hidden">
+    <div class="bubble-header">
+      <div class="docs-head-left">
+        <button id="wmBack" class="bubble-back hidden" data-i18n-title="wm.back" title="返回">‹</button>
+        <span id="wmTitle" class="bubble-title" data-i18n="wm.title">图片水印去除</span>
+      </div>
+      <button id="wmClose" class="bubble-close" data-i18n-title="common.hide" title="收起">×</button>
+    </div>
+    <div id="wmBody">
+      <div id="wmPickRow" class="docs-actions">
+        <button id="wmPick" class="link-btn" data-i18n="wm.pick">选择图片</button>
+        <span id="wmFile" class="wm-file"></span>
+      </div>
+
+      <div id="wmEditor" class="wm-editor hidden">
+        <div class="wm-toolbar">
+          <button id="wmBrush" class="chip active" data-i18n="wm.brush">画笔</button>
+          <button id="wmRect" class="chip" data-i18n="wm.rect">框选</button>
+          <input id="wmRadius" type="range" min="4" max="40" value="12" title="笔刷大小">
+          <button id="wmUndo" class="link-btn" data-i18n="wm.undo">撤销</button>
+          <button id="wmClear" class="link-btn" data-i18n="wm.clear">清空</button>
+        </div>
+        <div id="wmCanvasWrap" class="wm-canvas-wrap">
+          <canvas id="wmImgCanvas" class="wm-canvas"></canvas>
+          <canvas id="wmMarkCanvas" class="wm-canvas"></canvas>
+        </div>
+      </div>
+
+      <div id="wmHint" class="docs-hint"></div>
+      <div id="wmActions" class="docs-actions">
+        <span></span>
+        <button id="wmStart" class="primary-btn" data-i18n="wm.start" disabled>开始去除</button>
+      </div>
+
+      <div id="wmRun" class="hidden">
+        <div id="wmRunName" class="docs-run-name"></div>
+        <div class="progress-bar"><div id="wmRunFill" class="progress-fill"></div></div>
+        <div class="docs-run-row">
+          <span id="wmRunLabel"></span>
+          <span id="wmRunPct">0%</span>
+        </div>
+        <div class="docs-actions">
+          <button id="wmCancel" class="link-btn" data-i18n="common.cancel">取消</button>
+        </div>
+      </div>
+
+      <div id="wmDone" class="hidden">
+        <div id="wmDoneMsg" class="docs-done-msg"></div>
+        <div id="wmResults" class="docs-results"></div>
+        <div class="docs-actions">
+          <button id="wmOpenDir" class="secondary-btn" data-i18n="wm.openDir">打开临时文件夹</button>
+          <button id="wmAgain" class="primary-btn" data-i18n="wm.again">完成</button>
         </div>
       </div>
     </div>

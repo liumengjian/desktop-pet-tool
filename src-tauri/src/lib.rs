@@ -37,7 +37,9 @@ const MAIN_H: f64 = 620.0;
 
 mod docs;
 mod drop_target;
+mod face;
 mod i18n;
+mod watermark;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -103,6 +105,8 @@ struct AppState {
 struct MenuHandles {
     paste: MenuItem<tauri::Wry>,
     docs: MenuItem<tauri::Wry>,
+    face: MenuItem<tauri::Wry>,
+    watermark: MenuItem<tauri::Wry>,
     open: MenuItem<tauri::Wry>,
     clean: MenuItem<tauri::Wry>,
     autostart: CheckMenuItem<tauri::Wry>,
@@ -115,6 +119,8 @@ impl MenuHandles {
     fn apply_lang(&self) {
         let _ = self.paste.set_text(i18n::t("文档复制", "Copy documents"));
         let _ = self.docs.set_text(i18n::t("文档工具", "Document tools"));
+        let _ = self.face.set_text(i18n::t("人脸比对", "Face matching"));
+        let _ = self.watermark.set_text(i18n::t("图片水印去除", "Remove watermark"));
         let _ = self.open.set_text(i18n::t("打开临时文件夹", "Open temp folder"));
         let _ = self.clean.set_text(i18n::t("清理临时文件夹", "Clean temp folder"));
         let _ = self.autostart.set_text(i18n::t("开机自启动", "Launch at login"));
@@ -546,13 +552,29 @@ fn open_docs(app: &AppHandle, paths: Option<Vec<String>>) {
     }
 }
 
+/// 让悬浮球把「人脸比对」气泡弹出来（菜单 / 左键复用同一个入口）。
+fn open_face(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.emit("face-open", ());
+    }
+}
+
+/// 让悬浮球把「图片水印去除」气泡弹出来（菜单 / 左键复用同一个入口）。
+fn open_watermark(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.emit("wm-open", ());
+    }
+}
+
 // ============== 菜单 ==============
 /// 右键菜单里属于「工具」的条目 id。
 ///
 /// 打开过其中任意一项后，左键点悬浮主体会再次打开同一项。以后新增工具类菜单项，
 /// 只要把 id 加进这张表、并在 `run_tool_menu_item` 里补一条执行分支，左键行为就自动
 /// 生效，不需要再改点击逻辑。
-const TOOL_MENU_IDS: &[&str] = &["paste", "docs"];
+const TOOL_MENU_IDS: &[&str] = &["paste", "docs", "face", "watermark"];
 
 fn is_tool_menu_item(id: &str) -> bool {
     TOOL_MENU_IDS.contains(&id)
@@ -567,6 +589,14 @@ fn run_tool_menu_item(app: &AppHandle, id: &str) -> bool {
         }
         "docs" => {
             open_docs(app, None);
+            true
+        }
+        "face" => {
+            open_face(app);
+            true
+        }
+        "watermark" => {
+            open_watermark(app);
             true
         }
         _ => false,
@@ -605,6 +635,12 @@ fn build_menu(
     // 分区一：文档相关
     let paste = MenuItemBuilder::with_id("paste", i18n::t("文档复制", "Copy documents")).build(app)?;
     let docs = MenuItemBuilder::with_id("docs", i18n::t("文档工具", "Document tools")).build(app)?;
+    let face = MenuItemBuilder::with_id("face", i18n::t("人脸比对", "Face matching")).build(app)?;
+    let watermark = MenuItemBuilder::with_id(
+        "watermark",
+        i18n::t("图片水印去除", "Remove watermark"),
+    )
+    .build(app)?;
     // 分区二：临时文件夹与程序设置
     let open = MenuItemBuilder::with_id("open", i18n::t("打开临时文件夹", "Open temp folder")).build(app)?;
     let clean =
@@ -615,13 +651,15 @@ fn build_menu(
     let settings = MenuItemBuilder::with_id("settings", i18n::t("设置", "Settings")).build(app)?;
     let quit = MenuItemBuilder::with_id("quit", i18n::t("退出", "Quit")).build(app)?;
     let menu = MenuBuilder::new(app)
-        .items(&[&paste, &docs])
+        .items(&[&paste, &docs, &face, &watermark])
         .separator()
         .items(&[&open, &clean, &autostart, &settings, &quit])
         .build()?;
     let handles = MenuHandles {
         paste,
         docs,
+        face,
+        watermark,
         open,
         clean,
         autostart,
@@ -840,6 +878,8 @@ pub fn run() {
             tray: Mutex::new(None),
         })
         .manage(docs::DocsState::default())
+        .manage(face::FaceState::default())
+        .manage(watermark::WatermarkState::default())
         .setup(|app| {
             // 安装期预下载：NSIS 钩子以 --fetch-pdf-deps 拉起本程序，只拉取外置依赖后退出，
             // 不建窗口/托盘。退出码 0 = 就绪；非 0 = 失败，安装器跳过、首启再补下载。
@@ -955,7 +995,20 @@ pub fn run() {
             docs::docs_inspect,
             docs::docs_start,
             docs::docs_cancel,
-            docs::docs_open_outdir
+            docs::docs_open_outdir,
+            face::face_pick_group,
+            face::face_inspect,
+            face::face_status,
+            face::face_start,
+            face::face_cancel,
+            face::face_open_outdir,
+            watermark::wm_pick,
+            watermark::wm_thumbnail,
+            watermark::wm_inspect,
+            watermark::wm_status,
+            watermark::wm_start,
+            watermark::wm_cancel,
+            watermark::wm_open_outdir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
