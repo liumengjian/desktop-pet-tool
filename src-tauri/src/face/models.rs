@@ -6,9 +6,9 @@
 // 整包 buffalo_l 是 326MB，其中 137MB 用不上，不下发。
 //
 // 下发沿用「依赖外置」那条已跑通的链路：腾讯云 COS 公开直链 + manifest 里的
-// sha256 白名单 + LocalAppData 缓存 + marker。首次使用时才下载，不放进安装包。
+// sha256 白名单 + 安装目录 data 缓存 + marker。首次使用时才下载，不放进安装包。
 //
-// 缓存布局（LocalAppData 下，随 bundleid 目录在卸载时清理）：
+// 缓存布局（应用安装目录/data 下，例如 D:\tools\dpt\data）：
 //   face/<TAG>/models/det_10g.onnx
 //   face/<TAG>/models/w600k_r50.onnx
 //   face/<TAG>/deps/onnxruntime/...     onnxruntime 独立叠加目录（不动 pdfconv 的 site-packages）
@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// 模型目录标签：换模型 / 换运行时就换新标签，旧缓存不混用。
 const TAG: &str = "v1";
@@ -65,9 +65,7 @@ pub struct Models {
 }
 
 fn cache_root(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_local_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
+    crate::paths::install_data_root(app)
         .join("face")
         .join(TAG)
 }

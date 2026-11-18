@@ -109,7 +109,7 @@ sidecar Python（复用 binaries/pdfconv/python 运行时）
 
 ## 6. 模型与依赖下发（复用 `face/models.rs` 机制）
 
-缓存布局（LocalAppData，随 bundleid 目录卸载清理）：
+缓存布局（应用安装目录的 data 下，例如 `D:\tools\dpt\data`）：
 
 ```
 watermark/<TAG>/models/migan.onnx          # 首版 erase 模型
@@ -117,7 +117,7 @@ watermark/<TAG>/deps/onnxruntime/...       # onnxruntime 独立叠加目录
 watermark/<TAG>/marker.json
 ```
 
-- `manifest.json` 托管在自有 COS（沿用 `face-models` 同桶路径模式），条目含 `name / sha256 / bytes`。
+- `manifest.json` 只有 1KB，通过 `include_str!` 内置进 exe，不上传 COS；COS 只托管大模型 onnx。清单条目含 `name / sha256 / bytes`。
 - 下载走临时 `.part` → 完成后原子改名 → sha256 校验 → 关键文件齐全校验 → 写 marker；损坏只清半成品，不污染已提交缓存。
 - **onnxruntime 依赖去重**：若 `face` 已下载过 onnxruntime 叠加目录，直接复用，不再重复下载（实现时先探测 `face/<TAG>/deps`）。
 - 支持手工放置：把 onnx 放进 `models` 目录即可离线使用，不走网络。

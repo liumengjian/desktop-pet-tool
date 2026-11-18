@@ -142,7 +142,12 @@ impl BallDropTarget {
                 // （当前线程就是主线程），建 WebView2 窗口/等待事件循环都会把应用卡死。
                 // 现在文档交互改到悬浮球气泡里，只需入队 + 发事件，但仍交给线程等 Drop 返回后再发，
                 // 避免在模态循环里同步驱动 webview。
-                crate::stage_and_open_docs(&self.app, paths);
+                // 纯图片拖入默认打开水印工具；其余文件（含混合拖入）仍走文档工具。
+                if paths.iter().all(|p| crate::is_image_path(p)) {
+                    crate::stage_and_open_watermark(&self.app, paths);
+                } else {
+                    crate::stage_and_open_docs(&self.app, paths);
+                }
             }
         }
         Ok(())

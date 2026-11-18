@@ -68,7 +68,17 @@ body {
   align-items: center;
   justify-content: center;
 }
-.float-button:hover .mini-close { opacity: 1; }
+/* 悬浮状态由 JS 根据全局鼠标位置切换，避免右键原生菜单关闭后
+   WebView 的 :hover 残留，导致关闭按钮一直显示。 */
+.float-button.hovered {
+  transform: scale(1.06);
+  cursor: grab;
+}
+.float-button.hovered:active {
+  transform: scale(0.98);
+  cursor: grabbing;
+}
+.float-button.hovered .mini-close { opacity: 1; }
 .mini-close:hover { background: #d9534f; color: #fff; }
 
 /* ===== 输入气泡（对话冒泡，小号，在主体上方弹出） ===== */
@@ -103,6 +113,18 @@ body {
   border-radius: 2px;
 }
 .bubble.hidden { display: none; }
+
+/* 视口宽度兜底：气泡右侧固定贴边 22px，宽度都是写死的 px。一旦 CSS 视口被压小
+   （系统缩放 ≠ 100%、WebView2 页面缩放、DPI 虚拟化），宽气泡就会从左侧溢出，
+   被 html/body 的 overflow:hidden 齐边裁掉。这里把上限压到「视口宽 − 右侧 22 − 左侧 4」：
+   空间不够时只变窄折行，绝不再裁字。（根因修复见 renderer.js 的 fitWindowToDesign） */
+.docs-bubble,
+.face-bubble,
+.wm-bubble,
+.fs-bubble,
+.shred-bubble {
+  max-width: calc(100vw - 26px);
+}
 
 /* 入场：与 base 状态（opacity 0、下移、微缩）通过 transition 插值到完整可见 */
 .bubble.entering {
@@ -236,9 +258,10 @@ body {
 /* ===== 消息提示气泡（清理完成、复制成功等，对话冒泡样式） =====
    注意：不能设置 overflow:hidden，否则会把指向主体的箭头裁掉 */
 .msg-bubble {
-  /* 宽度跟着文字走，短消息不再是一条长条；超过 224px 才换行 */
+  /* 宽度跟着文字走，短消息不再是一条长条；超过 224px 才换行。
+     视口被压小时（见 .bubble 下的 max-width 兜底说明）再夹一次，避免溢出被裁 */
   width: max-content;
-  max-width: 224px;
+  max-width: min(224px, calc(100vw - 26px));
   min-height: 34px;
   display: flex;
   align-items: center;
@@ -337,7 +360,9 @@ body {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
-  height: 26px;
+  /* 不能写死高度：PDF 可转 8 种格式，芯片会折成两行；写死 26px 时第二行溢出容器，
+     文档流会直接把下面「继续添加 / 开始处理」那一行压住（两台机器都会出现，与缩放无关） */
+  min-height: 26px;
 }
 .chip-row.hidden { display: none; }
 
@@ -493,7 +518,15 @@ body {
   background: #fbfbfb;
   padding: 6px 8px 5px;
   margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
 }
+.face-group:hover { border-color: #bdbdbd; }
+.face-group.active {
+  border-color: #7c7c7c;
+  background: #fff;
+}
+.face-group.active .face-group-name { color: #111; }
 
 .face-group-head {
   display: flex;
@@ -627,3 +660,192 @@ body {
   transform: translate(-50%, -50%);
 }
 #wmMarkCanvas { cursor: crosshair; touch-action: none; }
+
+/* ===== 文件查找气泡：关键词 + 范围（本机 / 网络共享盘）→ 结果列表 ===== */
+.fs-bubble {
+  width: 360px;
+  padding: 12px 14px 14px;
+}
+.fs-bubble .bubble-title { font-size: 12px; }
+
+.fs-query { margin-bottom: 8px; }
+.fs-query:focus { border-color: #8a8a8a; }
+
+.fs-bubble .link-btn:disabled {
+  color: #ccc;
+  cursor: default;
+  text-decoration: none;
+}
+
+.fs-net {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.fs-net .url-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  font-size: 11px;
+}
+.fs-net .link-btn { flex: none; }
+
+.fs-actions { margin-top: 8px; }
+.fs-stat {
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  color: #999;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fs-results {
+  max-height: 264px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+.fs-results::-webkit-scrollbar { width: 4px; }
+.fs-results::-webkit-scrollbar-thumb { background: #d8d8d8; border-radius: 2px; }
+
+.fs-empty {
+  font-size: 11px;
+  color: #999;
+  line-height: 1.5;
+  padding: 8px 0;
+}
+
+.fs-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 2px;
+  border-top: 1px solid #f2f2f2;
+  cursor: pointer;
+}
+.fs-result:first-child { border-top: none; }
+.fs-result:hover { background: #fafafa; }
+
+.fs-result-main { flex: 1; min-width: 0; }
+.fs-result-name {
+  display: block;
+  font-size: 11px;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-result-meta {
+  display: block;
+  font-size: 10px;
+  color: #999;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+
+.fs-result-actions {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+.fs-result-actions .link-btn {
+  padding: 2px 0;
+  font-size: 10px;
+}
+
+/* ===== 文件粉碎气泡：待粉碎列表 + 风险提示 + 进度 ===== */
+.shred-bubble {
+  width: 340px;
+  padding: 12px 14px 14px;
+}
+.shred-bubble .bubble-title { font-size: 12px; }
+
+.shred-list {
+  max-height: 150px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.shred-list:empty { display: none; }
+.shred-list::-webkit-scrollbar { width: 4px; }
+.shred-list::-webkit-scrollbar-thumb { background: #d8d8d8; border-radius: 2px; }
+
+.shred-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-top: 1px solid #f2f2f2;
+}
+.shred-item:first-child { border-top: none; }
+.shred-item-main { flex: 1; min-width: 0; }
+.shred-item-name {
+  display: block;
+  font-size: 11px;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shred-item-meta {
+  display: block;
+  font-size: 10px;
+  color: #999;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shred-item-meta.bad { color: #d0021b; }
+
+.shred-remove {
+  flex: none;
+  border: none;
+  background: none;
+  color: #bbb;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.shred-remove:hover { color: #666; }
+
+.shred-warn {
+  font-size: 10px;
+  line-height: 1.5;
+  color: #b45b00;
+  background: #fff8ef;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+
+.shred-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #666;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.shred-opt input { margin: 2px 0 0; flex: none; }
+
+.shred-actions { margin-top: 8px; }
+.shred-stat {
+  flex: 1;
+  min-width: 0;
+  font-size: 10px;
+  color: #999;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shred-stat.multiline {
+  white-space: pre-line;
+  line-height: 1.5;
+  color: #666;
+}

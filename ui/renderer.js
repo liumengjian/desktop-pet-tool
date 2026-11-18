@@ -11,16 +11,22 @@ window.api = {
   onActivateInput: (cb) => window.__TAURI__.event.listen('float-activate-input', () => cb()),
   onToast: (cb) => window.__TAURI__.event.listen('float-toast', (e) => cb(e.payload)),
   notifyBlur: () => window.__TAURI__.core.invoke('notify_blur'),
-  resizeWindow: (w, h) => window.__TAURI__.core.invoke('window_resize', { w, h }),
+  // 连同当前 innerWidth 一起上报：后端用它和窗口物理宽度反推
+  // 「1 CSS 像素 = N 物理像素」，系统缩放/页面缩放时裁剪区域才不会算小
+  resizeWindow: (w, h) => window.__TAURI__.core.invoke('window_resize', {
+    w, h, cssW: window.innerWidth,
+  }),
   startDrag: () => window.__TAURI__.core.invoke('drag_start'),
   stopDrag: () => window.__TAURI__.core.invoke('drag_end'),
   requestClose: () => window.__TAURI__.core.invoke('request_close'),
   onGlobalMouse: (cb) => window.__TAURI__.event.listen('mouse-global', (e) => cb(e.payload)),
-  onOutsideClick: (cb) => window.__TAURI__.event.listen('mouse-outside-click', () => cb())
+  onOutsideClick: (cb) => window.__TAURI__.event.listen('mouse-outside-click', () => cb()),
+  onBallHoverClear: (cb) => window.__TAURI__.event.listen('ball-hover-clear', () => cb())
 };
 
 const btn = document.getElementById('floatButton');
 const miniClose = document.getElementById('miniClose');
+let ballHovered = false;
 const bubble = document.getElementById('bubble');
 const bubbleClose = document.getElementById('bubbleClose');
 const urlInput = document.getElementById('urlInput');
@@ -45,6 +51,28 @@ const ball = EmotionBall.create('#eb-render', {
 let expanded = false;
 let downloading = false;
 
+// 悬浮球 hover 状态：由全局鼠标位置驱动，不依赖 WebView 的 :hover。
+// Windows 原生右键菜单会打断 WebView 的 hover 状态，菜单关闭后 :hover 可能残留。
+function setBallHovered(on) {
+  on = !!on;
+  if (ballHovered === on) return;
+  ballHovered = on;
+  btn.classList.toggle('hovered', on);
+}
+
+function updateBallHover(mx, my, wx, wy) {
+  const dpr = window.devicePixelRatio || 1;
+  const x = (mx - wx) / dpr;
+  const y = (my - wy) / dpr;
+  const rect = btn.getBoundingClientRect();
+  const closeRect = miniClose.getBoundingClientRect();
+  const inBall = x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+  // 关闭按钮在主体外侧，鼠标移到 × 上时仍要算作悬浮，否则按钮会在点击前消失。
+  const inClose = x >= closeRect.left && x < closeRect.right
+    && y >= closeRect.top && y < closeRect.bottom;
+  setBallHovered(inBall || inClose);
+}
+
 // 系统文件选择框 / 资源管理器是独立窗口，里面任何一次点击都会被全局轮询判定为
 // 「点到球外面」，从而收起文档气泡。这两个标记用来在这类操作期间屏蔽该判定。
 let docsPickerOpen = false;
@@ -68,10 +96,12 @@ async function showMsg(msg, duration = 2200) {
   // 同一时刻只留一个气泡：文档面板开着时先让它退场，消息结束后再原样放回。
   // 三者共用 bottom:100px / right:22px，且窗口尺寸各按自己那套给（224 / 320 / 224 宽），
   // 直接叠着显示就会互相压住、外层还被裁窄。
-  if (docs.open || face.open || wm.open) {
+  if (docs.open || face.open || wm.open || fs.open || shred.open) {
     if (docs.open) bubbleHide(docsBubble);
     if (face.open) bubbleHide(faceBubble);
     if (wm.open) bubbleHide(wmBubble);
+    if (fs.open) bubbleHide(fsBubble);
+    if (shred.open) bubbleHide(shredBubble);
     await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
   }
   const box = measureMsg(msg);
@@ -94,6 +124,14 @@ async function showMsg(msg, duration = 2200) {
       setTimeout(() => { if (wm.open) wmLayout(); }, BUBBLE_HIDE_MS);
       return;
     }
+    if (fs.open) {
+      setTimeout(() => { if (fs.open) fsLayout(); }, BUBBLE_HIDE_MS);
+      return;
+    }
+    if (shred.open) {
+      setTimeout(() => { if (shred.open) shredLayout(); }, BUBBLE_HIDE_MS);
+      return;
+    }
     resizeLater(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
   }, duration);
 }
@@ -101,6 +139,12 @@ async function showMsg(msg, duration = 2200) {
 // ===== 展开 / 收起（主体始终显示，气泡在主体上方弹出） =====
 const COLLAPSED_SIZE = [112, 112];
 const EXPANDED_SIZE = [264, 232];
+
+// 主窗口的设计尺寸（CSS 像素，与 tauri.conf.json、lib.rs 的 MAIN_W / MAIN_H 一致）。
+// 所有气泡都是按这个视口宽度排的固定 px 宽度，视口被压小就会溢出被裁，
+// 所以启动时要用它把窗口物理尺寸校准回来（见文件末尾 fitWindowToDesign）。
+const DESIGN_W = 420;
+const DESIGN_H = 620;
 
 // 提示气泡按文字长度自适应宽度：短消息（如“临时文件夹已清理”）不再撑成一条长条。
 const MSG_PAD_X = 28;        // bubble 左右内边距 14 + 14
@@ -172,10 +216,12 @@ function resizeLater(w, h, delay = BUBBLE_HIDE_MS) {
 async function expand() {
   if (expanded) return;
   // 文档面板 / 人脸比对气泡与输入气泡互斥：先把面板收起再展开，否则两块气泡会叠在同一位置
-  if (docs.open || face.open || wm.open) {
+  if (docs.open || face.open || wm.open || fs.open || shred.open) {
     if (docs.open) hideDocsPanel();
     if (face.open) hideFacePanel();
     if (wm.open) hideWmPanel();
+    if (fs.open) hideFsPanel();
+    if (shred.open) hideShredPanel();
     // 等面板退场（200ms）再缩窗口，否则 320 宽的面板会在淡出途中被 264 的窗口裁掉左边一截
     await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
   }
@@ -210,7 +256,7 @@ let downPos = null;
 
 // 可交互元素（输入框/按钮/气泡）不参与拖动
 function isInteractive(el) {
-  return !!el.closest('input, button, .mini-close, #bubble, #docsBubble, #faceBubble, #wmBubble, #msgBubble');
+  return !!el.closest('input, button, .mini-close, #bubble, #docsBubble, #faceBubble, #wmBubble, #fsBubble, #shredBubble, #msgBubble');
 }
 
 document.addEventListener('mousedown', (e) => {
@@ -250,18 +296,24 @@ document.addEventListener('mouseup', (e) => {
         if (docs.open) hideDocsPanel();
         if (face.open) hideFacePanel();
         if (wm.open) hideWmPanel();
+        if (fs.open) hideFsPanel();
+        if (shred.open) hideShredPanel();
         if (expanded) collapse();
       };
       window.api.openLastTool()
         .then((opened) => { if (!opened) closePanels(); })
         .catch(closePanels);
     } else if (!e.target.closest('#bubble') && !e.target.closest('#docsBubble')
-      && !e.target.closest('#faceBubble') && !e.target.closest('#wmBubble') && !e.target.closest('#msgBubble')) {
+      && !e.target.closest('#faceBubble') && !e.target.closest('#wmBubble')
+      && !e.target.closest('#fsBubble') && !e.target.closest('#shredBubble')
+      && !e.target.closest('#msgBubble')) {
       // 点击窗口内空白（气泡以外）→ 收起气泡与文档面板
       if (expanded) collapse();
       if (docs.open) hideDocsPanel();
       if (face.open) hideFacePanel();
       if (wm.open) hideWmPanel();
+      if (fs.open) hideFsPanel();
+      if (shred.open) hideShredPanel();
     }
   }
 });
@@ -306,6 +358,8 @@ document.addEventListener('keydown', (e) => {
   if (docs.open) hideDocsPanel();
   if (face.open) hideFacePanel();
   if (wm.open) hideWmPanel();
+  if (fs.open) hideFsPanel();
+  if (shred.open) hideShredPanel();
 });
 
 // ===== 随机表情池 =====
@@ -413,6 +467,7 @@ function resetIdleTimer() {
 
 // ===== 眼睛：跟随鼠标（整个屏幕范围，主进程每 33ms 轮询全局鼠标位置） =====
 window.api.onGlobalMouse(({ mx, my, wx, wy }) => {
+  updateBallHover(mx, my, wx, wy);
   // 生气表情时取消瞳孔跟随（愤怒的眼神固定）
   if (ball.emotionId === '21') { ball.clearGaze(); return; }
   const rect = btn.getBoundingClientRect();
@@ -513,19 +568,27 @@ async function doDownload(url) {
   }
 }
 
+// 原生右键菜单关闭后，主进程会通知一次：菜单可能让 WebView 丢失 hover 状态
+window.api.onBallHoverClear(() => setBallHovered(false));
+
 // ===== 主进程触发的事件 =====
 window.api.onActivateInput(() => expand());
 window.api.onToast((msg) => showMsg(msg));
 // 点击主窗口以外的屏幕任意位置（气泡以外）→ 收起输入气泡与文档面板
 window.api.onOutsideClick(() => {
+  // 点到窗口外的桌面/其它程序：立即清掉悬浮态，不等下一次鼠标轮询
+  setBallHovered(false);
   // 正在系统文件选择框里操作：那不是「点空白收起」，不能收面板
   if (docsPickerOpen || Date.now() < docsSuppressUntil) return;
   if (facePickerOpen || Date.now() < faceSuppressUntil) return;
   if (wmPickerOpen || Date.now() < wmSuppressUntil) return;
+  if (fsPickerOpen || Date.now() < fsSuppressUntil) return;
   if (expanded) collapse();
   if (docs.open) hideDocsPanel();
   if (face.open) hideFacePanel();
   if (wm.open) hideWmPanel();
+  if (fs.open) hideFsPanel();
+  if (shred.open) hideShredPanel();
 });
 
 // 所有声明就绪后启动空闲睡觉计时（2 分钟无点击触发睡觉）
@@ -546,6 +609,8 @@ function applyLang(lang) {
   if (docs.open) { renderDocs(); docsLayout(); }
   if (face.open) { renderFace(); faceLayout(); }
   if (wm.open) { renderWm(); wmLayout(); }
+  if (fs.open) { renderFs(); fsLayout(); }
+  if (shred.open) { renderShred(); shredLayout(); }
 }
 
 async function loadLangFromConfig() {
@@ -560,6 +625,8 @@ async function loadLangFromConfig() {
   if (docs.open) { renderDocs(); docsLayout(); }
   if (face.open) { renderFace(); faceLayout(); }
   if (wm.open) { renderWm(); wmLayout(); }
+  if (fs.open) { renderFs(); fsLayout(); }
+  if (shred.open) { renderShred(); shredLayout(); }
 }
 
 try {
@@ -653,8 +720,30 @@ async function docsLayout() {
   });
 }
 
-function openDocsPanel() {
+/// 工具气泡互斥：打开新的工具前，先把其它还开着的气泡收起来，避免在同一位置叠住
+async function hideOtherToolBubbles(except) {
+  let any = false;
+  // 粘贴链接输入气泡同样占这个位置，先收起
+  if (expanded) { collapse(); any = true; }
+  if (except !== 'docs' && docs.open) { hideDocsPanel(); any = true; }
+  if (except !== 'face' && face.open) { hideFacePanel(); any = true; }
+  if (except !== 'wm' && wm.open) { hideWmPanel(); any = true; }
+  if (except !== 'fs' && fs.open) { hideFsPanel(); any = true; }
+  if (except !== 'shred' && shred.open) { hideShredPanel(); any = true; }
+  // 消息提示气泡也占同一个位置，一并退场
+  if (!msgBubble.classList.contains('hidden')) { bubbleHide(msgBubble); any = true; }
+  // 等淡出动画走完再让新面板入场，否则两块气泡会短暂压在一起
+  if (any) await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
+}
+
+// 连续切换工具时只让最后一次打开生效，避免上一个 async 打开流程在等待后重新弹出
+let toolOpenSeq = 0;
+
+async function openDocsPanel() {
   if (expanded) collapse();
+  const seq = ++toolOpenSeq;
+  await hideOtherToolBubbles('docs');
+  if (seq !== toolOpenSeq) return;
   if (!msgBubble.classList.contains('hidden')) bubbleHide(msgBubble);
   docs.open = true;
   // 完成页 / 运行中的进度页再打开时保持原页面：面板因失焦收起后，
@@ -671,7 +760,7 @@ function openDocsPanel() {
     clearTimeout(idleTimer);
     clearTimeout(drowsyTimer);
   }
-  docsLayout();
+  await docsLayout();
 }
 
 function hideDocsPanel() {
@@ -907,6 +996,7 @@ async function pickDocs() {
     const paths = await invoke('docs_pick_files');
     if (!Array.isArray(paths) || !paths.length) {
       // 取消了也要保证面板还在（极端情况下可能已被别的路径收起）
+      await hideOtherToolBubbles('docs');
       docs.open = true;
       renderDocs();
       await docsLayout();
@@ -914,12 +1004,14 @@ async function pickDocs() {
     }
     await invoke('docs_stage', { paths });
     await loadPendingDocs();
+    await hideOtherToolBubbles('docs');
     docs.open = true;
     docs.stage = docs.mode ? 'options' : 'choose';
     renderDocs();
     await docsLayout();
   } catch (err) {
     if (docsHint) docsHint.textContent = T('docs.pickFailed', { err });
+    await hideOtherToolBubbles('docs');
     docs.open = true;
     renderDocs();
     await docsLayout();
@@ -1074,7 +1166,7 @@ docsOpenDir.addEventListener('click', (e) => {
   e.stopPropagation();
   // 资源管理器是独立窗口，点进去的瞬间别把面板收掉
   docsSuppressUntil = Date.now() + 1500;
-  invoke('docs_open_outdir').catch(() => {});
+  invoke('docs_open_outdir', { paths: (docs.outputs || []).map((o) => o.path) }).catch(() => {});
 });
 docsBack.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1186,6 +1278,7 @@ const face = {
   running: false,
   outputs: [],
   needModel: false,  // 本地还没缓存模型：面板上提前说明会下载
+  pasteTarget: 'a',  // Ctrl+V 粘贴到哪一组：a / b
 };
 
 let facePickerOpen = false;      // 系统选图框开着：期间任何点击都不是「点空白收起」
@@ -1214,11 +1307,10 @@ async function refreshFaceModelState() {
 
 async function openFacePanel() {
   if (expanded) collapse();
-  // 文档面板 / 消息气泡与它互斥：同一位置只能有一块气泡
-  if (docs.open) {
-    hideDocsPanel();
-    await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
-  }
+  const seq = ++toolOpenSeq;
+  // 与文档工具 / 文件查找 / 水印气泡互斥：同一位置只能有一块气泡
+  await hideOtherToolBubbles('face');
+  if (seq !== toolOpenSeq) return;
   if (!msgBubble.classList.contains('hidden')) bubbleHide(msgBubble);
   face.open = true;
   if (face.stage !== 'done' && face.stage !== 'running') face.stage = 'choose';
@@ -1292,6 +1384,9 @@ function renderFace() {
 
   faceStart.disabled = face.running || !face.a.length || !face.b.length;
   faceTitle.textContent = T('face.title');
+  Array.from(faceGroups.querySelectorAll('.face-group')).forEach((group) => {
+    group.classList.toggle('active', group.dataset.group === face.pasteTarget);
+  });
 
   if (showChoices) {
     if (face.needModel) {
@@ -1307,11 +1402,13 @@ function renderFace() {
 }
 
 async function pickFaceGroup(which) {
+  face.pasteTarget = which;
   facePickerOpen = true;
   try {
     const picked = await invoke('face_pick_group');
     if (!Array.isArray(picked) || !picked.length) {
       // 取消选择也要保证面板还在
+      await hideOtherToolBubbles('face');
       face.open = true;
       renderFace();
       await faceLayout();
@@ -1325,6 +1422,7 @@ async function pickFaceGroup(which) {
       list.push({ path: f.path, name: f.name, sizeLabel: f.sizeLabel });
       added += 1;
     });
+    await hideOtherToolBubbles('face');
     face.open = true;
     face.stage = 'choose';
     renderFace();
@@ -1333,6 +1431,7 @@ async function pickFaceGroup(which) {
     }
     await faceLayout();
   } catch (err) {
+    await hideOtherToolBubbles('face');
     face.open = true;
     faceHint.textContent = T('face.pickFailed', { err });
     faceHint.classList.remove('hidden');
@@ -1342,6 +1441,16 @@ async function pickFaceGroup(which) {
     facePickerOpen = false;
   }
 }
+
+// 点击第一组 / 第二组盒子，决定下一次 Ctrl+V 粘贴到哪一组。
+Array.from(faceGroups.querySelectorAll('.face-group')).forEach((group) => {
+  group.addEventListener('click', () => {
+    const which = group.dataset.group === 'b' ? 'b' : 'a';
+    if (face.pasteTarget === which) return;
+    face.pasteTarget = which;
+    renderFace();
+  });
+});
 
 function armFaceQuiet() {
   clearTimeout(faceQuietTimer);
@@ -1458,7 +1567,7 @@ faceOpenDir.addEventListener('click', (e) => {
   e.stopPropagation();
   // 资源管理器是独立窗口，点进去的瞬间别把面板收掉
   faceSuppressUntil = Date.now() + 1500;
-  invoke('face_open_outdir').catch(() => {});
+  invoke('face_open_outdir', { paths: (face.outputs || []).map((o) => o.path) }).catch(() => {});
 });
 faceBack.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1533,10 +1642,14 @@ const wm = {
   running: false,
   outputs: [],
   needModel: false,
-  tool: 'brush',
+  tool: null,       // null = 拖图；'brush' / 'rect' = 标记
   brushRadius: 12,
   drawing: false,
   current: null,    // 正在画的一笔 / 框选预览
+  panning: false,
+  panStart: null,
+  panX: 0,          // 图片相对容器的平移（CSS px）
+  panY: 0,
   zoom: 1,          // 相对基准尺寸的缩放倍数
   baseW: 0,         // contain 适配容器后的基准显示宽（CSS px）
   baseH: 0,         // 基准显示高（CSS px）
@@ -1565,22 +1678,24 @@ async function refreshWmModelState() {
   }
 }
 
-async function openWmPanel() {
+async function openWmPanel(paths) {
   if (expanded) collapse();
-  if (docs.open) {
-    hideDocsPanel();
-    await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
-  }
-  if (face.open) {
-    hideFacePanel();
-    await new Promise((r) => setTimeout(r, BUBBLE_HIDE_MS));
-  }
+  const seq = ++toolOpenSeq;
+  // 与文档工具 / 文件查找 / 人脸比对气泡互斥
+  await hideOtherToolBubbles('wm');
+  if (seq !== toolOpenSeq) return;
   if (!msgBubble.classList.contains('hidden')) bubbleHide(msgBubble);
   wm.open = true;
   if (wm.stage !== 'done' && wm.stage !== 'running') wm.stage = 'choose';
   await refreshWmModelState();
   renderWm();
   await wmLayout();
+  // 拖放图片打开：路径随事件带过来，气泡布置完成后再载入，避免首帧尺寸算错。
+  if (Array.isArray(paths) && paths.length) {
+    await loadWmPaths(paths);
+    renderWm();
+    await wmLayout();
+  }
 }
 
 function hideWmPanel() {
@@ -1597,14 +1712,40 @@ function wmCanvasPoint(e) {
   return [Math.round(x), Math.round(y)];
 }
 
+function clampWmPan() {
+  const cw = Math.max(1, wmCanvasWrap.clientWidth);
+  const ch = Math.max(1, wmCanvasWrap.clientHeight);
+  const dw = wm.baseW * wm.zoom;
+  const dh = wm.baseH * wm.zoom;
+  const maxX = Math.max(0, (dw - cw) / 2);
+  const maxY = Math.max(0, (dh - ch) / 2);
+  wm.panX = Math.max(-maxX, Math.min(maxX, wm.panX));
+  wm.panY = Math.max(-maxY, Math.min(maxY, wm.panY));
+}
+
 function applyWmZoom() {
   if (!wm.baseW || !wm.baseH) return;
+  clampWmPan();
   const w = wm.baseW * wm.zoom;
   const h = wm.baseH * wm.zoom;
+  const transform = `translate(-50%, -50%) translate(${wm.panX}px, ${wm.panY}px)`;
   wmImgCanvas.style.width = w + 'px';
   wmImgCanvas.style.height = h + 'px';
+  wmImgCanvas.style.transform = transform;
   wmMarkCanvas.style.width = w + 'px';
   wmMarkCanvas.style.height = h + 'px';
+  wmMarkCanvas.style.transform = transform;
+  updateWmCursor();
+}
+
+function updateWmCursor() {
+  if (wm.panning) {
+    wmMarkCanvas.style.cursor = 'grabbing';
+  } else if (!wm.tool) {
+    wmMarkCanvas.style.cursor = wm.zoom > 1 ? 'grab' : 'default';
+  } else {
+    wmMarkCanvas.style.cursor = 'crosshair';
+  }
 }
 
 // 光标停留在画布区域内：滚轮放大 / 缩小图片，范围 0.4 ~ 4 倍
@@ -1654,6 +1795,12 @@ function loadWmImage(info) {
   wm.image = info;
   wm.strokes = [];
   wm.current = null;
+  wm.tool = null;
+  wm.drawing = false;
+  wm.panning = false;
+  wm.panStart = null;
+  wm.panX = 0;
+  wm.panY = 0;
   if (!info || !info.dataUrl || !info.w || !info.h) {
     console.error('wm thumbnail invalid', info);
     wmHint.textContent = T('wm.notImage');
@@ -1699,6 +1846,7 @@ function renderWm() {
   wmBrush.classList.toggle('active', wm.tool === 'brush');
   wmRect.classList.toggle('active', wm.tool === 'rect');
   wmRadius.disabled = wm.tool !== 'brush';
+  updateWmCursor();
 
   wmFile.textContent = wm.image ? wm.image.name : '';
   wmStart.disabled = wm.running || !wm.image || wm.strokes.length === 0;
@@ -1709,8 +1857,8 @@ function renderWm() {
       wmHint.textContent = T('wm.hintNeedModel');
     } else if (!wm.image) {
       wmHint.textContent = T('wm.hintEmpty');
-    } else if (wm.strokes.length === 0) {
-      wmHint.textContent = T('wm.hintReady');
+    } else if (!wm.tool) {
+      wmHint.textContent = T('wm.hintDrag');
     } else {
       wmHint.textContent = T('wm.hintReady');
     }
@@ -1722,6 +1870,7 @@ async function pickWmImage() {
   try {
     const picked = await invoke('wm_pick');
     if (!Array.isArray(picked) || !picked.length) {
+      await hideOtherToolBubbles('wm');
       wm.open = true;
       renderWm();
       await wmLayout();
@@ -1732,28 +1881,55 @@ async function pickWmImage() {
       wmHint.textContent = T('wm.notImage');
       return;
     }
-    const info = await invoke('wm_thumbnail', { path: item.path });
-    wm.image = {
-      path: item.path,
-      name: item.name,
-      sizeLabel: item.sizeLabel,
-      dataUrl: info.dataUrl,
-      origW: info.origW,
-      origH: info.origH,
-      w: info.w,
-      h: info.h,
-    };
-    loadWmImage(wm.image);
-    wm.stage = 'choose';
+    await useWmItem(item);
+    await hideOtherToolBubbles('wm');
+    wm.open = true;
     renderWm();
     await wmLayout();
   } catch (err) {
+    await hideOtherToolBubbles('wm');
     wm.open = true;
     wmHint.textContent = T('wm.pickFailed', { err });
     renderWm();
     await wmLayout();
   } finally {
     wmPickerOpen = false;
+  }
+}
+
+// 把一张已校验的图片装进编辑器：选图、Ctrl+V、拖放共用。
+async function useWmItem(item) {
+  const info = await invoke('wm_thumbnail', { path: item.path });
+  wm.outputs = [];
+  wm.image = {
+    path: item.path,
+    name: item.name,
+    sizeLabel: item.sizeLabel,
+    dataUrl: info.dataUrl,
+    origW: info.origW,
+    origH: info.origH,
+    w: info.w,
+    h: info.h,
+  };
+  loadWmImage(wm.image);
+  wm.stage = 'choose';
+}
+
+// 从路径列表里挑第一张有效图片载入；走 wm_inspect 统一过滤不存在 / 非图片文件。
+async function loadWmPaths(paths) {
+  if (wm.running) return false;
+  try {
+    const info = await invoke('wm_inspect', { paths });
+    const item = (info || []).find((f) => f && f.ok);
+    if (!item) {
+      wmHint.textContent = T('paste.noImage');
+      return false;
+    }
+    await useWmItem(item);
+    return true;
+  } catch (err) {
+    wmHint.textContent = T('wm.pickFailed', { err });
+    return false;
   }
 }
 
@@ -1873,11 +2049,17 @@ function onWmDone(payload) {
   wmLayout();
 }
 
-// 画布指针交互
+// 画布指针交互：未选工具时拖图；选中画笔/框选后才开始标记
 wmMarkCanvas.addEventListener('pointerdown', (e) => {
   if (!wm.image || wm.running) return;
   e.preventDefault();
   wmMarkCanvas.setPointerCapture(e.pointerId);
+  if (!wm.tool) {
+    wm.panning = true;
+    wm.panStart = { x: e.clientX, y: e.clientY, panX: wm.panX, panY: wm.panY };
+    updateWmCursor();
+    return;
+  }
   const [x, y] = wmCanvasPoint(e);
   if (wm.tool === 'brush') {
     wm.drawing = true;
@@ -1890,6 +2072,12 @@ wmMarkCanvas.addEventListener('pointerdown', (e) => {
 });
 
 wmMarkCanvas.addEventListener('pointermove', (e) => {
+  if (wm.panning && wm.panStart) {
+    wm.panX = wm.panStart.panX + (e.clientX - wm.panStart.x);
+    wm.panY = wm.panStart.panY + (e.clientY - wm.panStart.y);
+    applyWmZoom();
+    return;
+  }
   if (!wm.drawing || !wm.current) return;
   const [x, y] = wmCanvasPoint(e);
   if (wm.current.kind === 'brush') {
@@ -1902,6 +2090,12 @@ wmMarkCanvas.addEventListener('pointermove', (e) => {
 });
 
 function endWmStroke() {
+  if (wm.panning) {
+    wm.panning = false;
+    wm.panStart = null;
+    updateWmCursor();
+    return;
+  }
   if (!wm.drawing || !wm.current) return;
   if (wm.current.kind === 'brush') {
     if (wm.current.points.length > 0) wm.strokes.push(wm.current);
@@ -1923,12 +2117,22 @@ wmMarkCanvas.addEventListener('pointercancel', endWmStroke);
 
 wmBrush.addEventListener('click', (e) => {
   e.stopPropagation();
-  wm.tool = 'brush';
+  wm.tool = wm.tool === 'brush' ? null : 'brush';
+  wm.drawing = false;
+  wm.current = null;
+  wm.panning = false;
+  wm.panStart = null;
+  redrawMark();
   renderWm();
 });
 wmRect.addEventListener('click', (e) => {
   e.stopPropagation();
-  wm.tool = 'rect';
+  wm.tool = wm.tool === 'rect' ? null : 'rect';
+  wm.drawing = false;
+  wm.current = null;
+  wm.panning = false;
+  wm.panStart = null;
+  redrawMark();
   renderWm();
 });
 wmRadius.addEventListener('input', () => {
@@ -1964,7 +2168,7 @@ wmCancel.addEventListener('click', (e) => {
 wmOpenDir.addEventListener('click', (e) => {
   e.stopPropagation();
   wmSuppressUntil = Date.now() + 1500;
-  invoke('wm_open_outdir').catch(() => {});
+  invoke('wm_open_outdir', { paths: (wm.outputs || []).map((o) => o.path) }).catch(() => {});
 });
 wmBack.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1990,11 +2194,897 @@ wmClose.addEventListener('click', (e) => {
 });
 
 try {
-  window.__TAURI__.event.listen('wm-open', () => { openWmPanel(); });
+  window.__TAURI__.event.listen('wm-open', (e) => {
+    openWmPanel(e && e.payload ? e.payload.paths : null);
+  });
   window.__TAURI__.event.listen('wm-progress', (e) => onWmProgress(e.payload));
   window.__TAURI__.event.listen('wm-done', (e) => onWmDone(e.payload));
 } catch (err) {
   console.error('水印去除事件监听注册失败', err);
+}
+
+// ===== 气泡内 Ctrl+V：文档 / 人脸 / 水印共用后端剪贴板读取 =====
+let clipboardPasting = false;
+
+function setPasteError(target, message) {
+  if (target === 'docs') {
+    if (docsHint) {
+      docsHint.textContent = message;
+      docsHint.classList.remove('hidden');
+    }
+  } else if (target === 'face') {
+    faceHint.textContent = message;
+    faceHint.classList.remove('hidden');
+  } else if (target === 'wm') {
+    wmHint.textContent = message;
+    wmHint.classList.remove('hidden');
+  }
+}
+
+async function pasteDocsPaths(paths) {
+  const info = await invoke('docs_inspect', { paths });
+  const valid = (info || []).filter((f) => f && f.path);
+  const before = docs.files.length;
+  mergeDocs(valid);
+  const added = docs.files.length - before;
+  if (!added) {
+    setPasteError('docs', T('paste.noValid'));
+    return;
+  }
+  if (!docs.running) {
+    docs.outputs = [];
+    docs.stage = docs.mode ? 'options' : 'choose';
+  }
+  renderDocs();
+  await docsLayout();
+}
+
+async function pasteFacePaths(paths) {
+  if (face.running) {
+    setPasteError('face', T('paste.busy'));
+    return;
+  }
+  const info = await invoke('face_inspect', { paths });
+  const valid = (info || []).filter((f) => f && f.ok);
+  const which = face.pasteTarget === 'b' ? 'b' : 'a';
+  const list = which === 'b' ? face.b : face.a;
+  let added = 0;
+  valid.forEach((f) => {
+    if (list.some((x) => x.path === f.path)) return;
+    list.push({ path: f.path, name: f.name, sizeLabel: f.sizeLabel });
+    added += 1;
+  });
+  face.outputs = [];
+  face.stage = 'choose';
+  renderFace();
+  if (!added) {
+    setPasteError('face', T('paste.noImage'));
+  }
+  await faceLayout();
+}
+
+async function pasteWmPaths(paths) {
+  if (wm.running) {
+    setPasteError('wm', T('paste.busy'));
+    return;
+  }
+  const loaded = await loadWmPaths(paths);
+  renderWm();
+  if (!loaded) {
+    setPasteError('wm', T('paste.noImage'));
+  }
+  await wmLayout();
+}
+
+async function pasteClipboard(target) {
+  if (clipboardPasting) return;
+  clipboardPasting = true;
+  try {
+    const payload = await invoke('clipboard_read');
+    const paths = payload && Array.isArray(payload.files) ? payload.files : [];
+    if (!paths.length) {
+      setPasteError(target, T('paste.empty'));
+      return;
+    }
+    if (target === 'docs') {
+      await pasteDocsPaths(paths);
+    } else if (target === 'face') {
+      await pasteFacePaths(paths);
+    } else if (target === 'wm') {
+      await pasteWmPaths(paths);
+    }
+  } catch (err) {
+    setPasteError(target, T('paste.failed', { err }));
+  } finally {
+    clipboardPasting = false;
+  }
+}
+
+// 只在三个工具气泡之一打开时接管 Ctrl+V；不影响其它输入场景。
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.repeat) return;
+  if (String(e.key || '').toLowerCase() !== 'v') return;
+  const target = docs.open ? 'docs' : face.open ? 'face' : wm.open ? 'wm' : null;
+  if (!target) return;
+  e.preventDefault();
+  e.stopPropagation();
+  pasteClipboard(target);
+});
+
+// ===== 文件查找：按文件名模糊匹配；来源文件夹留空 = 只查本机 =====
+// 扫描在 Rust 侧后台线程里跑，按批把结果推回来；这里负责输入、来源、结果与打开/定位。
+
+const fsBubble = document.getElementById('fsBubble');
+const fsClose = document.getElementById('fsClose');
+const fsQuery = document.getElementById('fsQuery');
+const fsNetPath = document.getElementById('fsNetPath');
+const fsNetPick = document.getElementById('fsNetPick');
+const fsHint = document.getElementById('fsHint');
+const fsStat = document.getElementById('fsStat');
+const fsStart = document.getElementById('fsStart');
+const fsResults = document.getElementById('fsResults');
+
+const FS_W = 400;         // 窗口宽：气泡 360 + 右侧箭头/边距
+const FS_MAX_H = 508;     // 与其它面板一致：主窗口 620，扣掉 112 的底部偏移
+const FS_SHOW_LIMIT = 300;
+
+const fs = {
+  open: false,
+  running: false,
+  done: false,
+  canceled: false,
+  truncated: false,
+  results: [],      // [{ path, name, dir, sizeLabel, modified, score }]
+  scanned: 0,
+  hits: 0,
+  elapsedMs: 0,
+  errors: [],
+  fail: '',          // 查找没能启动的原因（如共享盘不可达），直接显示原文
+  lastH: 0,
+};
+
+let fsPickerOpen = false;      // 系统文件夹选择框开着：不要把它当成「点空白收起」
+let fsSuppressUntil = 0;       // 刚打开的资源管理器窗口，短暂屏蔽外部点击
+let fsRenderTimer = 0;
+
+async function fsLayout() {
+  clearTimeout(fsBubble._hideTimer);
+  fsBubble.classList.remove('closing', 'hidden');
+  const h = Math.min(FS_MAX_H, Math.max(160, fsBubble.offsetHeight));
+  fs.lastH = h;
+  await resizeNow(FS_W, Math.round(h + 112));
+  requestAnimationFrame(() => {
+    if (fs.open) bubbleShow(fsBubble);
+  });
+}
+
+async function openFsPanel() {
+  if (expanded) collapse();
+  const seq = ++toolOpenSeq;
+  // 与文档工具 / 人脸比对 / 水印气泡互斥
+  await hideOtherToolBubbles('fs');
+  if (seq !== toolOpenSeq) return;
+  if (!msgBubble.classList.contains('hidden')) bubbleHide(msgBubble);
+  fs.open = true;
+  renderFs();
+  await fsLayout();
+  setTimeout(() => { if (fs.open) fsQuery.focus(); }, 80);
+}
+
+function hideFsPanel() {
+  if (!fs.open) return;
+  fs.open = false;
+  bubbleHide(fsBubble);
+  resizeLater(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
+}
+
+function fsElapsedSec() {
+  return Math.max(0, Math.round(fs.elapsedMs / 1000));
+}
+
+function fsFormatTime(unixSec) {
+  if (!unixSec) return '';
+  try {
+    const d = new Date(unixSec * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  } catch (err) {
+    return '';
+  }
+}
+
+function fsNetworkPath() {
+  return fsNetPath.value.trim();
+}
+
+/// 来源或关键词变了以后，旧结果不再对应，清掉避免误解
+function fsResetResults() {
+  fs.results = [];
+  fs.done = false;
+  fs.canceled = false;
+  fs.truncated = false;
+  fs.scanned = 0;
+  fs.hits = 0;
+  fs.elapsedMs = 0;
+  fs.errors = [];
+  fs.fail = '';
+}
+
+function fsHintText() {
+  if (fs.fail) return fs.fail;
+  const errNote = fs.errors.length ? ` · ${T('fs.errors', { n: fs.errors.length })}` : '';
+  if (fs.running) return T('fs.searching');
+  if (!fs.done) {
+    if (fsNetworkPath()) return T('fs.hintNetwork');
+    return T('fs.hintLocal');
+  }
+  const n = fs.results.length;
+  if (fs.canceled) return (n ? T('fs.canceledFound', { n }) : T('fs.canceled')) + errNote;
+  if (!n) return T('fs.empty') + errNote;
+  return (fs.truncated ? T('fs.foundTrunc', { n }) : T('fs.found', { n })) + errNote;
+}
+
+function renderFs() {
+  fsNetPath.disabled = fs.running;
+  fsNetPick.disabled = fs.running;
+
+  // 提示与进度
+  fsHint.textContent = fsHintText();
+  fsHint.title = fs.fail || fs.errors.join('\n');
+  fsHint.classList.remove('hidden');
+  if (fs.running) {
+    fsStat.textContent = T('fs.progress', { n: fs.scanned, m: fs.hits });
+  } else if (fs.done && !fs.fail) {
+    fsStat.textContent = T('fs.summary', { n: fs.scanned, s: fsElapsedSec() });
+  } else {
+    fsStat.textContent = '';
+  }
+
+  // 操作按钮在「开始查找 / 停止」之间切换
+  fsStart.textContent = fs.running ? T('fs.stop') : T('fs.start');
+  fsStart.disabled = !fs.running && !fsQuery.value.trim();
+
+  // 结果列表：得分高的在前，同分按名称排
+  const scrollTop = fsResults.scrollTop;
+  fsResults.innerHTML = '';
+  if (!fs.results.length) {
+    if (fs.done && !fs.running && !fs.fail) {
+      const empty = document.createElement('div');
+      empty.className = 'fs-empty';
+      empty.textContent = T('fs.empty');
+      fsResults.appendChild(empty);
+    }
+  } else {
+    const list = fs.results
+      .slice()
+      .sort((a, b) => (b.score - a.score) || a.name.localeCompare(b.name));
+    list.slice(0, FS_SHOW_LIMIT).forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'fs-result';
+      row.title = item.path;
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fsReveal(item.path);
+      });
+
+      const main = document.createElement('div');
+      main.className = 'fs-result-main';
+
+      const name = document.createElement('span');
+      name.className = 'fs-result-name';
+      name.textContent = item.name;
+
+      const meta = document.createElement('span');
+      meta.className = 'fs-result-meta';
+      const time = fsFormatTime(item.modified);
+      meta.textContent = [item.dir, item.sizeLabel, time].filter(Boolean).join(' · ');
+
+      main.append(name, meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'fs-result-actions';
+
+      const open = document.createElement('button');
+      open.className = 'link-btn';
+      open.textContent = T('fs.openAction');
+      open.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fsOpenFile(item.path);
+      });
+
+      const reveal = document.createElement('button');
+      reveal.className = 'link-btn';
+      reveal.textContent = T('fs.revealAction');
+      reveal.title = T('fs.revealTitle');
+      reveal.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fsReveal(item.path);
+      });
+
+      actions.append(open, reveal);
+      row.append(main, actions);
+      fsResults.appendChild(row);
+    });
+  }
+  fsResults.scrollTop = scrollTop;
+}
+
+function scheduleFsRender(forceLayout = false) {
+  if (fsRenderTimer) return;
+  fsRenderTimer = setTimeout(() => {
+    fsRenderTimer = 0;
+    if (!fs.open) return;
+    renderFs();
+    const h = Math.min(FS_MAX_H, Math.max(160, fsBubble.offsetHeight));
+    if (forceLayout || Math.abs(h - fs.lastH) > 2) fsLayout();
+  }, 150);
+}
+
+async function startFsSearch() {
+  if (fs.running) return;
+  const query = fsQuery.value.trim();
+  if (!query) {
+    fsHint.textContent = T('fs.hintNeedQuery');
+    fsHint.classList.remove('hidden');
+    fsQuery.focus();
+    return;
+  }
+  const root = fsNetworkPath();
+  fs.running = true;
+  fs.done = false;
+  fs.canceled = false;
+  fs.truncated = false;
+  fs.results = [];
+  fs.scanned = 0;
+  fs.hits = 0;
+  fs.elapsedMs = 0;
+  fs.errors = [];
+  fs.fail = '';
+  renderFs();
+  await fsLayout();
+
+  try {
+    await invoke('fs_search', {
+      req: {
+        query,
+        // 留空 = 只查本机磁盘；填了就只查这个文件夹（本机目录或网络共享）
+        root: root || null,
+        limit: FS_SHOW_LIMIT,
+      },
+    });
+  } catch (err) {
+    // 例如共享路径不可达：后端直接返回错误，面板回到可再次查找的状态
+    fs.running = false;
+    fs.done = true;
+    fs.fail = T('fs.failed', { err: String(err) });
+    renderFs();
+    await fsLayout();
+  }
+}
+
+async function stopFsSearch() {
+  try {
+    await invoke('fs_cancel');
+  } catch (err) {
+    console.error('停止查找失败', err);
+  }
+  fsHint.textContent = T('fs.canceling');
+}
+
+async function fsReveal(path) {
+  // 资源管理器是独立窗口：点进去的瞬间别把面板收掉
+  fsSuppressUntil = Date.now() + 1500;
+  try {
+    await invoke('fs_reveal', { path });
+  } catch (err) {
+    showMsg(T('fs.revealFailed', { err: String(err) }), 2600);
+  }
+}
+
+async function fsOpenFile(path) {
+  fsSuppressUntil = Date.now() + 1500;
+  try {
+    await invoke('fs_open', { path });
+  } catch (err) {
+    showMsg(T('fs.openFailed', { err: String(err) }), 2600);
+  }
+}
+
+async function pickFsFolder() {
+  fsPickerOpen = true;
+  try {
+    const picked = await invoke('fs_pick_folder');
+    if (picked) {
+      fsNetPath.value = picked;
+      fsResetResults();
+    } else {
+      fs.fail = '';
+    }
+    // 文件选择框不是模态的，期间可能点开了别的工具气泡
+    await hideOtherToolBubbles('fs');
+    fs.open = true;
+    renderFs();
+    await fsLayout();
+  } catch (err) {
+    await hideOtherToolBubbles('fs');
+    fs.open = true;
+    fs.fail = T('fs.pickFailed', { err: String(err) });
+    renderFs();
+    await fsLayout();
+  } finally {
+    fsPickerOpen = false;
+  }
+}
+
+function onFsBatch(payload) {
+  if (!payload || !Array.isArray(payload.items)) return;
+  let added = 0;
+  payload.items.forEach((item) => {
+    if (!item || !item.path) return;
+    if (fs.results.some((x) => x.path === item.path)) return;
+    fs.results.push(item);
+    added += 1;
+  });
+  if (typeof payload.total === 'number') fs.hits = Math.max(fs.hits, payload.total);
+  if (added && fs.open) scheduleFsRender(true);
+}
+
+function onFsProgress(payload) {
+  if (!payload || !fs.running) return;
+  fs.scanned = Number(payload.scanned) || 0;
+  fs.hits = Number(payload.hits) || 0;
+  fs.elapsedMs = Number(payload.elapsedMs) || 0;
+  if (fs.open) fsStat.textContent = T('fs.progress', { n: fs.scanned, m: fs.hits });
+}
+
+function onFsDone(payload) {
+  fs.running = false;
+  fs.done = true;
+  fs.canceled = !!(payload && payload.canceled);
+  fs.truncated = !!(payload && payload.truncated);
+  fs.errors = (payload && Array.isArray(payload.errors)) ? payload.errors : [];
+  fs.scanned = Number(payload && payload.scanned) || fs.scanned;
+  fs.elapsedMs = Number(payload && payload.elapsedMs) || fs.elapsedMs;
+
+  // 用户中途收了气泡：只在球边提示结果数量，不强行弹回面板
+  if (!fs.open) {
+    if (fs.results.length) {
+      showMsg(T('fs.doneToast', { n: fs.results.length }), 2600);
+    } else {
+      showMsg(T('fs.noResultToast'), 2600);
+    }
+    return;
+  }
+
+  renderFs();
+  fsLayout();
+}
+
+fsStart.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (fs.running) stopFsSearch();
+  else startFsSearch();
+});
+
+fsQuery.addEventListener('input', () => {
+  if (fs.fail) {
+    fs.fail = '';
+    renderFs();
+  }
+  fsStart.disabled = !fs.running && !fsQuery.value.trim();
+});
+
+fsNetPath.addEventListener('input', () => {
+  if (fs.running) return;
+  // 换了来源文件夹，旧结果不再对应当前来源
+  fsResetResults();
+  scheduleFsRender(false);
+});
+
+fsQuery.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  if (!fs.running) startFsSearch();
+});
+
+fsNetPath.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  if (!fs.running) startFsSearch();
+});
+
+fsNetPick.addEventListener('click', (e) => {
+  e.stopPropagation();
+  pickFsFolder();
+});
+
+fsClose.addEventListener('click', (e) => {
+  e.stopPropagation();
+  hideFsPanel();
+});
+
+try {
+  window.__TAURI__.event.listen('fs-open', () => { openFsPanel(); });
+  window.__TAURI__.event.listen('fs-batch', (e) => onFsBatch(e.payload));
+  window.__TAURI__.event.listen('fs-progress', (e) => onFsProgress(e.payload));
+  window.__TAURI__.event.listen('fs-done', (e) => onFsDone(e.payload));
+} catch (err) {
+  console.error('文件查找事件监听注册失败', err);
+}
+
+// ===== 文件粉碎：资源管理器右键 → 悬浮球气泡确认 → 随机覆盖后删除 =====
+// 右键菜单（HKCU 静态动词）只把路径带进来、永远不直接删；用户在气泡里点
+// 「开始粉碎」才动手：逐个文件用随机数据覆盖再删除，被占用时结束占用进程重试。
+
+const shredBubble = document.getElementById('shredBubble');
+const shredTitle = document.getElementById('shredTitle');
+const shredClose = document.getElementById('shredClose');
+const shredList = document.getElementById('shredList');
+const shredWarn = document.getElementById('shredWarn');
+const shredOptRow = document.getElementById('shredOptRow');
+const shredKillLocks = document.getElementById('shredKillLocks');
+const shredActions = document.getElementById('shredActions');
+const shredStat = document.getElementById('shredStat');
+const shredStart = document.getElementById('shredStart');
+const shredRun = document.getElementById('shredRun');
+const shredRunName = document.getElementById('shredRunName');
+const shredRunFill = document.getElementById('shredRunFill');
+const shredRunLabel = document.getElementById('shredRunLabel');
+const shredRunPct = document.getElementById('shredRunPct');
+const shredCancel = document.getElementById('shredCancel');
+const shredDone = document.getElementById('shredDone');
+const shredDoneMsg = document.getElementById('shredDoneMsg');
+const shredDoneNote = document.getElementById('shredDoneNote');
+const shredDoneList = document.getElementById('shredDoneList');
+const shredAgain = document.getElementById('shredAgain');
+
+const SHRED_W = 380;          // 与其它面板同一套窗口宽度
+const SHRED_MAX_H = 508;      // 主窗口 620，扣掉 112 的底部偏移
+const SHRED_LIST_MAX = 20;    // 列表最多显示 20 项，再多靠标题里的数量
+
+const shred = {
+  open: false,
+  stage: 'confirm',   // confirm | running | done
+  paths: [],          // 待粉碎的路径
+  items: [],          // shred_inspect 返回的详情
+  running: false,
+  percent: 0,
+  current: '',
+  doneFiles: 0,
+  filesTotal: 0,
+  lastDone: 0,      // 已覆盖字节（进度文案用）
+  lastTotal: 0,     // 总字节
+  summary: null,
+  lastH: 0,
+};
+
+async function shredLayout() {
+  clearTimeout(shredBubble._hideTimer);
+  shredBubble.classList.remove('closing', 'hidden');
+  const h = Math.min(SHRED_MAX_H, Math.max(160, shredBubble.offsetHeight));
+  shred.lastH = h;
+  await resizeNow(SHRED_W, Math.round(h + 112));
+  requestAnimationFrame(() => {
+    if (shred.open) bubbleShow(shredBubble);
+  });
+}
+
+function hideShredPanel() {
+  if (!shred.open) return;
+  shred.open = false;
+  bubbleHide(shredBubble);
+  resizeLater(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
+}
+
+function shredSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+  return n + ' B';
+}
+
+function shredItemMeta(item) {
+  if (item.error) return T('shred.badPath', { err: item.error });
+  const files = Number(item.files) || 0;
+  if (item.isDir && !files) return T('shred.itemEmpty');
+  if (item.isDir) return T('shred.itemDir', { files, size: shredSize(item.size) });
+  return shredSize(item.size);
+}
+
+function renderShred() {
+  const confirm = shred.stage === 'confirm';
+  shredTitle.textContent = shred.paths.length > 1
+    ? T('shred.titleCount', { n: shred.paths.length })
+    : T('shred.title');
+
+  shredList.classList.toggle('hidden', !confirm);
+  shredWarn.classList.toggle('hidden', !confirm);
+  shredOptRow.classList.toggle('hidden', !confirm);
+  shredActions.classList.toggle('hidden', !confirm);
+  shredRun.classList.toggle('hidden', shred.stage !== 'running');
+  shredDone.classList.toggle('hidden', shred.stage !== 'done');
+
+  if (confirm) {
+    shredList.innerHTML = '';
+    shred.items.slice(0, SHRED_LIST_MAX).forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'shred-item';
+      row.title = item.path;
+
+      const main = document.createElement('div');
+      main.className = 'shred-item-main';
+
+      const name = document.createElement('span');
+      name.className = 'shred-item-name';
+      name.textContent = item.name;
+
+      const meta = document.createElement('span');
+      meta.className = 'shred-item-meta' + (item.error ? ' bad' : '');
+      meta.textContent = shredItemMeta(item);
+
+      main.append(name, meta);
+
+      const remove = document.createElement('button');
+      remove.className = 'shred-remove';
+      remove.textContent = '×';
+      remove.title = T('docs.remove');
+      remove.addEventListener('click', (e) => {
+        e.stopPropagation();
+        shredRemove(item.path);
+      });
+
+      row.append(main, remove);
+      shredList.appendChild(row);
+    });
+
+    const good = shred.items.filter((it) => it.exists && !it.error);
+    const totalBytes = good.reduce((a, it) => a + (Number(it.size) || 0), 0);
+    const totalFiles = good.reduce((a, it) => a + (Number(it.files) || 0), 0);
+    shredStat.textContent = good.length
+      ? T('shred.item', { files: totalFiles, size: shredSize(totalBytes) })
+      : '';
+
+    const dirs = good.filter((it) => it.isDir).length;
+    shredWarn.textContent = T('shred.warnOne') + (dirs ? ' ' + T('shred.warnDir', { n: dirs }) : '');
+    shredWarn.title = T('shred.killTip');
+
+    shredStart.disabled = !good.length;
+  } else if (shred.stage === 'running') {
+    const pct = Math.max(0, Math.min(100, Number(shred.percent) || 0));
+    shredRunName.textContent = shred.current || T('shred.running');
+    shredRunFill.style.width = pct + '%';
+    shredRunLabel.textContent = T('shred.progress', {
+      filesDone: shred.doneFiles,
+      filesTotal: shred.filesTotal,
+      done: shredSize(shred.lastDone),
+      total: shredSize(shred.lastTotal),
+    });
+    shredRunPct.textContent = pct + '%';
+  } else if (shred.stage === 'done' && shred.summary) {
+    const s = shred.summary;
+    const files = Number(s.okFiles) || 0;
+    const dirs = Number(s.okDirs) || 0;
+    const failed = Number(s.failed) || 0;
+
+    if (s.canceled) {
+      shredDoneMsg.textContent = T('shred.canceled');
+    } else if (failed) {
+      shredDoneMsg.textContent = T('shred.doneFail', { files, failed });
+    } else {
+      shredDoneMsg.textContent = T('shred.done', { files, dirs, size: shredSize(s.freed) });
+    }
+
+    const notes = [];
+    if (s.killed && s.killed.length) notes.push(T('shred.killed', { names: s.killed.join(', ') }));
+    if (s.reboot && s.reboot.length) notes.push(T('shred.reboot', { n: s.reboot.length }));
+    shredDoneNote.textContent = notes.join('\n');
+    shredDoneNote.classList.toggle('hidden', !notes.length);
+    shredDoneNote.classList.toggle('multiline', !!notes.length);
+
+    shredDoneList.innerHTML = '';
+    (s.failedItems || []).forEach((text) => {
+      const row = document.createElement('div');
+      row.className = 'fs-result';
+      const line = document.createElement('span');
+      line.className = 'fs-result-name';
+      line.textContent = text;
+      row.appendChild(line);
+      shredDoneList.appendChild(row);
+    });
+  }
+}
+
+async function shredInspect() {
+  if (!shred.paths.length) {
+    shred.items = [];
+    renderShred();
+    await shredLayout();
+    return;
+  }
+  try {
+    const items = await invoke('shred_inspect', { paths: shred.paths });
+    shred.items = Array.isArray(items) ? items : [];
+  } catch (err) {
+    shred.items = shred.paths.map((p) => ({
+      path: p,
+      name: p.split(/[\\/]/).pop() || p,
+      isDir: false,
+      size: 0,
+      files: 0,
+      exists: true,
+      error: String(err),
+    }));
+  }
+  if (!shred.open) return;
+  renderShred();
+  await shredLayout();
+}
+
+async function openShredPanel(paths) {
+  if (shred.running) {
+    showMsg(T('shred.running'), 2200);
+    return;
+  }
+  const incoming = (paths || []).slice();
+
+  // 多选时资源管理器会一项拉起一次进程：确认页已经开着就把新路径并进列表，
+  // 不要用最后一项覆盖前面已经收到的。
+  if (shred.open && shred.stage === 'confirm') {
+    const merged = shred.paths.slice();
+    incoming.forEach((p) => {
+      if (!merged.some((x) => x.toLowerCase() === p.toLowerCase())) merged.push(p);
+    });
+    shred.paths = merged;
+    await shredInspect();
+    return;
+  }
+
+  if (expanded) collapse();
+  const seq = ++toolOpenSeq;
+  await hideOtherToolBubbles('shred');
+  if (seq !== toolOpenSeq) return;
+  if (!msgBubble.classList.contains('hidden')) bubbleHide(msgBubble);
+
+  shred.open = true;
+  shred.stage = 'confirm';
+  shred.summary = null;
+  shred.running = false;
+  shred.items = [];
+  const uniq = [];
+  incoming.forEach((p) => {
+    if (!uniq.some((x) => x.toLowerCase() === p.toLowerCase())) uniq.push(p);
+  });
+  shred.paths = uniq;
+  shredStart.disabled = true;
+  shredStat.textContent = '';
+  renderShred();
+  await shredLayout();
+  await shredInspect();
+}
+
+/// 后端在右键点击时已把路径入队（见 shred::stage_and_open）。
+/// 多选会连续来好几个请求：用一条 promise 串起来，避免并发弹出 / 互相覆盖列表。
+let shredChain = Promise.resolve();
+
+function pullShredPending() {
+  shredChain = shredChain
+    .then(async () => {
+      const pending = (await invoke('shred_take_pending')) || [];
+      if (!pending.length) return;
+      await openShredPanel(pending);
+    })
+    .catch((err) => {
+      console.error('读取待粉碎路径失败', err);
+    });
+  return shredChain;
+}
+
+function shredRemove(path) {
+  if (shred.running) return;
+  shred.paths = shred.paths.filter((p) => p !== path);
+  shred.items = shred.items.filter((it) => it.path !== path);
+  renderShred();
+  shredLayout();
+}
+
+async function startShred() {
+  if (shred.running || !shred.paths.length) return;
+  shred.running = true;
+  shred.stage = 'running';
+  shred.percent = 0;
+  shred.current = '';
+  shred.doneFiles = 0;
+  shred.filesTotal = 0;
+  shred.lastDone = 0;
+  shred.lastTotal = 0;
+  renderShred();
+  await shredLayout();
+  try {
+    await invoke('shred_start', {
+      req: { paths: shred.paths, killLocks: !!shredKillLocks.checked },
+    });
+  } catch (err) {
+    shred.running = false;
+    shred.stage = 'confirm';
+    renderShred();
+    await shredLayout();
+    showMsg(T('shred.failedToast', { err: String(err) }), 2600);
+  }
+}
+
+async function stopShred() {
+  shredRunLabel.textContent = T('shred.canceling');
+  try {
+    await invoke('shred_cancel');
+  } catch (err) {
+    console.error('取消粉碎失败', err);
+  }
+}
+
+function onShredProgress(payload) {
+  if (!payload) return;
+  shred.percent = Number(payload.percent) || 0;
+  shred.current = String(payload.current || '');
+  shred.doneFiles = Number(payload.filesDone) || 0;
+  shred.filesTotal = Number(payload.filesTotal) || 0;
+  shred.lastDone = Number(payload.done) || 0;
+  shred.lastTotal = Number(payload.total) || 0;
+  if (!shred.open || shred.stage !== 'running') return;
+  const pct = Math.max(0, Math.min(100, shred.percent));
+  shredRunName.textContent = shred.current || T('shred.running');
+  shredRunFill.style.width = pct + '%';
+  shredRunLabel.textContent = T('shred.progress', {
+    filesDone: shred.doneFiles,
+    filesTotal: shred.filesTotal,
+    done: shredSize(shred.lastDone),
+    total: shredSize(shred.lastTotal),
+  });
+  shredRunPct.textContent = pct + '%';
+}
+
+function onShredDone(payload) {
+  shred.running = false;
+  shred.summary = payload || null;
+  shred.stage = 'done';
+  shred.percent = 100;
+  const s = payload || {};
+  if (!shred.open) {
+    if (s.canceled) showMsg(T('shred.canceled'), 2600);
+    else showMsg(T('shred.doneToast', { files: Number(s.okFiles) || 0, size: shredSize(s.freed) }), 2600);
+    return;
+  }
+  renderShred();
+  shredLayout();
+}
+
+shredStart.addEventListener('click', (e) => {
+  e.stopPropagation();
+  startShred();
+});
+
+shredCancel.addEventListener('click', (e) => {
+  e.stopPropagation();
+  stopShred();
+});
+
+shredClose.addEventListener('click', (e) => {
+  e.stopPropagation();
+  hideShredPanel();
+});
+
+shredAgain.addEventListener('click', (e) => {
+  e.stopPropagation();
+  hideShredPanel();
+  showMsg(T('shred.againToast'), 2600);
+});
+
+try {
+  window.__TAURI__.event.listen('shred-open', () => { pullShredPending(); });
+  window.__TAURI__.event.listen('shred-progress', (e) => onShredProgress(e.payload));
+  window.__TAURI__.event.listen('shred-done', (e) => onShredDone(e.payload));
+} catch (err) {
+  console.error('文件粉碎事件监听注册失败', err);
 }
 
 let dragAccepting = false;
@@ -2036,6 +3126,54 @@ window.__TAURI__.event.listen('docs-mood', (e) => {
   }
 });
 
-// 所有函数声明完成后按配置落定界面语言（默认中文）
-loadLangFromConfig();
+// ===== 窗口尺寸自校准 =====
+// 正常情况下系统缩放多少，CSS 视口都是 420×620。但有的机器（DPI 虚拟化、
+// 兼容性设置里的「替代高 DPI 缩放行为」、页面缩放叠加）窗口物理尺寸没跟着放大，
+// WebView2 却按真实渲染比例绘制，CSS 视口被压到 300 出头 —— 固定宽度、右侧贴边的
+// 气泡就会从左侧溢出，被 body 的 overflow:hidden 裁掉。
+//
+// 校正不猜比例：把「当前物理尺寸 × 设计CSS ÷ 当前CSS」交给后端（一次就能收敛）。
+// 不用 devicePixelRatio，它可能只反映系统缩放，而实际渲染还叠加了页面缩放。
+async function fitWindowToDesign() {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const cw = window.innerWidth;
+    const ch = window.innerHeight;
+    if (Math.abs(cw - DESIGN_W) <= 1 && Math.abs(ch - DESIGN_H) <= 1) break;
+    try {
+      await window.__TAURI__.core.invoke('window_fit', {
+        w: DESIGN_W,
+        h: DESIGN_H,
+        cssW: cw,
+        cssH: ch,
+      });
+    } catch (err) {
+      console.error('窗口尺寸校准失败', err);
+      break;
+    }
+    await sleep(80); // 等尺寸真正生效，否则读到的还是旧视口
+    // 窗口改了但视口一点没动：这台机器不接受这种改法，别再空转，交给 CSS 兜底
+    if (window.innerWidth === cw && window.innerHeight === ch) break;
+  }
+  // fit 内部用的是推算比例；这里按实测视口再算一次裁剪区域，确保「可点击区域」
+  // 与真实内容严格对齐（比例算大了会让窗口露出透明边，透出后面的程序）
+  try {
+    await window.api.resizeWindow(COLLAPSED_SIZE[0], COLLAPSED_SIZE[1]);
+  } catch (err) {
+    console.error('裁剪区域重算失败', err);
+  }
+  const cw = window.innerWidth;
+  const ch = window.innerHeight;
+  if (Math.abs(cw - DESIGN_W) > 1 || Math.abs(ch - DESIGN_H) > 1) {
+    console.warn(`窗口视口未能对齐设计尺寸：${cw}×${ch}（期望 ${DESIGN_W}×${DESIGN_H}），已交给 CSS 兜底`);
+  }
+}
+
+fitWindowToDesign().catch((err) => console.error('窗口尺寸校准异常', err));
+
+// 所有函数声明完成后按配置落定界面语言（默认中文），
+// 再检查是否有右键菜单带进来的粉碎路径（本次可能是从资源管理器拉起的）。
+loadLangFromConfig().then(() => {
+  setTimeout(() => { if (!shred.open) pullShredPending(); }, 150);
+});
 

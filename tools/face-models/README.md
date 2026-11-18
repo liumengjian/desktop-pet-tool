@@ -57,8 +57,10 @@ Invoke-WebRequest "$base/manifest.json" -UseBasicParsing | Select-Object -Expand
 应用侧的缓存布局（命中后完全不走网络）：
 
 ```
-%LOCALAPPDATA%\com.desktop-pet-tool.float\face\v1\
+<安装目录>\data\face\v1\
   models\{det_10g.onnx, w600k_r50.onnx}
   deps\{onnxruntime, google, flatbuffers, packaging, ...}
   marker.json
 ```
+
+例如安装到 `D:\tools\dpt` 时，实际路径为 `D:\tools\dpt\data\face\v1\`。

@@ -96,16 +96,17 @@ https://<你的OSS域名>/pdfconv/
 | 包体 | 58.8MB（zip）；解压后 site-packages 166.7MB |
 | 鉴权 | 公开读、无签名 URL，无 Token 有效期问题 |
 
-### 6.2 缓存布局（用户可写目录，不进安装目录）
+### 6.2 缓存布局（应用安装目录的 data 下）
 
 ```
-%LOCALAPPDATA%\com.desktop-pet-tool.float\pdfconv\v0.5.13-1\
+<安装目录>\data\pdfconv\v0.5.13-1\
   site-packages\          解压就位的依赖目录
   marker.json             { version, sha256, at }，用于判定缓存是否可用
 ```
 
-- 放 LocalAppData：体积大、无需随账号漫游；卸载时安装器会自动清理整个 bundleid 目录。
-- 按版本标签隔离：升级依赖换新标签，旧缓存不混用。
+- 例如安装到 `D:\tools\dpt` 时，实际路径为 `D:\tools\dpt\data\pdfconv\v0.5.13-1\`。
+- 安装目录不可写时才回退到 LocalAppData；正常安装不占 C 盘。
+- 按版本标签隔离，升级依赖换新标签，旧缓存不混用。
 - 下载 → 哈希校验 → 解压到 `stage` 暂存目录 → 关键文件齐全校验 → 原子改名就位 → 写 marker；任一失败只清半成品，不污染正式目录。
 
 ### 6.3 触发时机（方案 B）

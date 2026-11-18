@@ -1,10 +1,10 @@
 // 外置 Python 依赖（site-packages）的下载、校验、解压与本地缓存。
 //
 // 方案 B：安装时由引导器优先拉取；失败 / 离线则首次转换时补下载；再失败回退自研链路。
-// 缓存按版本标签隔离到用户可写数据目录，不写安装目录；下载失败只清理半成品，
-// 不污染已提交的可用缓存。
+// 缓存按版本标签隔离到应用安装目录的 data 下；安装目录不可写时才回退 LocalAppData。
+// 下载失败只清理半成品，不污染已提交的可用缓存。
 //
-// 缓存布局（LocalAppData 下，随 bundleid 目录在卸载时一并清理）：
+// 缓存布局（应用安装目录/data 下，例如 D:\tools\dpt\data）：
 //   pdfconv/<VERSION>/site-packages/   解压后的依赖目录
 //   pdfconv/<VERSION>/marker.json     版本 + 哈希标记，用于判断缓存是否可用
 //   pdfconv/<VERSION>/download.zip     下载临时包（提交后删除）
@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use super::zip_min;
 
@@ -50,10 +50,8 @@ struct Marker {
 }
 
 fn cache_root(app: &AppHandle) -> PathBuf {
-    // 放 LocalAppData：体积大且无需随账号漫游；卸载时安装器会清理整个 bundleid 目录。
-    app.path()
-        .app_local_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
+    // 优先放应用安装目录：体积大，且不占用 C 盘。
+    crate::paths::install_data_root(app)
         .join("pdfconv")
         .join(DEPS_VERSION)
 }

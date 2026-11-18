@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "desktop-pet-tool",
+  "productName": "dpt",
   "version": "1.0.0",
   "identifier": "com.desktop-pet-tool.float",
   "build": {
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "desktop-pet-tool",
+        "title": "dpt",
         "width": 420,
         "height": 620,
         "resizable": false,

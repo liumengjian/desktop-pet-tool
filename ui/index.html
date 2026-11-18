@@ -80,6 +80,35 @@
     </div>
   </div>
 
+  <!-- 文件查找气泡：名称模糊匹配 → 来源文件夹（留空 = 只查本机） → 打开或定位 -->
+  <div id="fsBubble" class="bubble fs-bubble hidden">
+    <div class="bubble-header">
+      <div class="docs-head-left">
+        <span class="bubble-title" data-i18n="fs.title">文件查找</span>
+      </div>
+      <button id="fsClose" class="bubble-close" data-i18n-title="common.hide" title="收起">×</button>
+    </div>
+    <div id="fsBody">
+      <input id="fsQuery" class="url-input fs-query" data-i18n-placeholder="fs.placeholder"
+             placeholder="输入文件名关键词，支持模糊匹配" autocomplete="off" spellcheck="false">
+
+      <div id="fsNetBox" class="fs-net">
+        <input id="fsNetPath" class="url-input" data-i18n-placeholder="fs.netPlaceholder"
+               placeholder="留空只查本机；也可填文件夹或 \\服务器\共享" autocomplete="off" spellcheck="false">
+        <button id="fsNetPick" class="link-btn" data-i18n="fs.browse">选择</button>
+      </div>
+
+      <div id="fsHint" class="docs-hint"></div>
+
+      <div class="docs-actions fs-actions">
+        <span id="fsStat" class="fs-stat"></span>
+        <button id="fsStart" class="primary-btn" data-i18n="fs.start" disabled>开始查找</button>
+      </div>
+
+      <div id="fsResults" class="fs-results"></div>
+    </div>
+  </div>
+
   <!-- 人脸比对气泡：两组照片各上传多张 → 跨组一一对应 → Word（每页一对） -->
   <div id="faceBubble" class="bubble face-bubble hidden">
     <div class="bubble-header">
@@ -91,7 +120,7 @@
     </div>
     <div id="faceBody">
       <div id="faceGroups">
-        <div class="face-group">
+        <div class="face-group" data-group="a">
           <div class="face-group-head">
             <span class="face-group-name" data-i18n="face.groupA">第一组</span>
             <span id="faceCountA" class="face-count">0</span>
@@ -99,7 +128,7 @@
           </div>
           <div id="faceListA" class="face-list"></div>
         </div>
-        <div class="face-group">
+        <div class="face-group" data-group="b">
           <div class="face-group-head">
             <span class="face-group-name" data-i18n="face.groupB">第二组</span>
             <span id="faceCountB" class="face-count">0</span>
@@ -154,9 +183,9 @@
 
       <div id="wmEditor" class="wm-editor hidden">
         <div class="wm-toolbar">
-          <button id="wmBrush" class="chip active" data-i18n="wm.brush">画笔</button>
+          <button id="wmBrush" class="chip" data-i18n="wm.brush">画笔</button>
           <button id="wmRect" class="chip" data-i18n="wm.rect">框选</button>
-          <input id="wmRadius" type="range" min="4" max="40" value="12" title="笔刷大小">
+          <input id="wmRadius" type="range" min="4" max="40" value="12" title="笔刷大小" disabled>
           <button id="wmUndo" class="link-btn" data-i18n="wm.undo">撤销</button>
           <button id="wmClear" class="link-btn" data-i18n="wm.clear">清空</button>
         </div>
@@ -190,6 +219,51 @@
         <div class="docs-actions">
           <button id="wmOpenDir" class="secondary-btn" data-i18n="wm.openDir">打开临时文件夹</button>
           <button id="wmAgain" class="primary-btn" data-i18n="wm.again">完成</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 文件粉碎气泡：资源管理器右键带进来的文件 / 文件夹 → 确认 → 随机覆盖后删除 -->
+  <div id="shredBubble" class="bubble shred-bubble hidden">
+    <div class="bubble-header">
+      <div class="docs-head-left">
+        <span id="shredTitle" class="bubble-title" data-i18n="shred.title">文件粉碎</span>
+      </div>
+      <button id="shredClose" class="bubble-close" data-i18n-title="common.hide" title="收起">×</button>
+    </div>
+    <div id="shredBody">
+      <div id="shredList" class="shred-list"></div>
+      <div id="shredWarn" class="shred-warn"></div>
+      <label id="shredOptRow" class="shred-opt">
+        <input id="shredKillLocks" type="checkbox" checked>
+        <span id="shredKillLocksText" data-i18n="shred.killLocks">被占用时结束占用进程</span>
+      </label>
+
+      <div id="shredActions" class="docs-actions">
+        <span id="shredStat" class="shred-stat"></span>
+        <button id="shredStart" class="primary-btn" data-i18n="shred.start" disabled>开始粉碎</button>
+      </div>
+
+      <div id="shredRun" class="hidden">
+        <div id="shredRunName" class="docs-run-name"></div>
+        <div class="progress-bar"><div id="shredRunFill" class="progress-fill"></div></div>
+        <div class="docs-run-row">
+          <span id="shredRunLabel"></span>
+          <span id="shredRunPct">0%</span>
+        </div>
+        <div class="docs-actions">
+          <button id="shredCancel" class="link-btn" data-i18n="shred.cancel">取消</button>
+        </div>
+      </div>
+
+      <div id="shredDone" class="hidden">
+        <div id="shredDoneMsg" class="docs-done-msg"></div>
+        <div id="shredDoneNote" class="shred-stat"></div>
+        <div id="shredDoneList" class="docs-results"></div>
+        <div class="docs-actions">
+          <span></span>
+          <button id="shredAgain" class="primary-btn" data-i18n="shred.ok">完成</button>
         </div>
       </div>
     </div>

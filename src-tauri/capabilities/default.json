@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "windows": ["main", "settings", "docs"],
+  "windows": ["main", "settings", "docs", "cleanup"],
   "permissions": [
     "core:default",
     "core:window:allow-set-size",

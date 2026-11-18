@@ -107,6 +107,7 @@ pub fn convert(
     cmd.env("PDFCONV_SITE_PACKAGES", &site_pkgs);
     // 不继承本机 PYTHONPATH，避免污染随包解释器
     cmd.env_remove("PYTHONPATH");
+    crate::proc::hide_console(&mut cmd);
 
     let mut child = cmd
         .spawn()

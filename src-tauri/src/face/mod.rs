@@ -286,22 +286,9 @@ pub fn face_cancel(state: State<'_, FaceState>) {
 }
 
 #[tauri::command]
-pub fn face_open_outdir(app: AppHandle) -> Result<(), String> {
+pub fn face_open_outdir(app: AppHandle, paths: Option<Vec<String>>) -> Result<(), String> {
     let dir = crate::docs::resolve_output_dir(&app);
-    let path = dir.to_string_lossy().to_string();
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("{}{}", tr("打开目录失败: ", "Failed to open the folder: "), e))?;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = path;
-        return Err(tr("仅支持 Windows", "Windows only"));
-    }
-    Ok(())
+    crate::reveal::open_folder_selecting(&dir, paths.as_deref().unwrap_or(&[]))
 }
 
 // ---------------- 任务 ----------------
@@ -381,6 +368,7 @@ fn run_job(app: &AppHandle, job: &MatchJob, outdir: &Path) -> Result<DonePayload
     cmd.env("PDFCONV_SITE_PACKAGES", &site);
     cmd.env("FACE_DEPS", &ready.deps);
     cmd.env_remove("PYTHONPATH");
+    crate::proc::hide_console(&mut cmd);
 
     let mut child = cmd
         .spawn()

@@ -1,13 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use clipboard_rs::Clipboard;
+use clipboard_rs::common::RustImage;
+use clipboard_rs::{Clipboard, ClipboardContext};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
-use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItem, MenuItemBuilder};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tauri::menu::{
+    CheckMenuItem, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItem, MenuItemBuilder, Submenu,
+};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
@@ -35,10 +38,17 @@ const SETTINGS_H: f64 = 412.0;
 const MAIN_W: f64 = 420.0;
 const MAIN_H: f64 = 620.0;
 
+mod cleanup;
 mod docs;
 mod drop_target;
 mod face;
+mod filesearch;
 mod i18n;
+mod paths;
+mod proc;
+mod reveal;
+mod shred;
+mod single;
 mod watermark;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -93,6 +103,8 @@ struct AppState {
     dragging: AtomicBool,
     visible_width: AtomicI32,
     visible_height: AtomicI32,
+    /// 最近一次请求的裁剪尺寸（CSS px）。窗口尺寸重新对齐后要用它重算可见区域。
+    last_region_req: Mutex<Option<(f64, f64)>>,
     drag_origin: Mutex<Option<(i32, i32, i32, i32)>>, // (start_cursor_x, start_cursor_y, win_x, win_y)
     menu: Mutex<Option<Menu<tauri::Wry>>>,
     /// 托盘菜单里各项的句柄。切换语言时只改文字（set_text），不重建菜单：
@@ -105,8 +117,13 @@ struct AppState {
 struct MenuHandles {
     paste: MenuItem<tauri::Wry>,
     docs: MenuItem<tauri::Wry>,
+    filesearch: MenuItem<tauri::Wry>,
     face: MenuItem<tauri::Wry>,
     watermark: MenuItem<tauri::Wry>,
+    system: Submenu<tauri::Wry>,
+    junk: MenuItem<tauri::Wry>,
+    large: MenuItem<tauri::Wry>,
+    cdrive: MenuItem<tauri::Wry>,
     open: MenuItem<tauri::Wry>,
     clean: MenuItem<tauri::Wry>,
     autostart: CheckMenuItem<tauri::Wry>,
@@ -119,8 +136,15 @@ impl MenuHandles {
     fn apply_lang(&self) {
         let _ = self.paste.set_text(i18n::t("文档复制", "Copy documents"));
         let _ = self.docs.set_text(i18n::t("文档工具", "Document tools"));
+        let _ = self
+            .filesearch
+            .set_text(i18n::t("文件查找", "File search"));
         let _ = self.face.set_text(i18n::t("人脸比对", "Face matching"));
-        let _ = self.watermark.set_text(i18n::t("图片水印去除", "Remove watermark"));
+        let _ = self.watermark.set_text(i18n::t("水印去除", "Remove watermark"));
+        let _ = self.system.set_text(i18n::t("系统工具", "System tools"));
+        let _ = self.junk.set_text(i18n::t("垃圾清理", "Junk cleanup"));
+        let _ = self.large.set_text(i18n::t("大文件清理", "Large files"));
+        let _ = self.cdrive.set_text(i18n::t("C 盘专清", "C: drive cleanup"));
         let _ = self.open.set_text(i18n::t("打开临时文件夹", "Open temp folder"));
         let _ = self.clean.set_text(i18n::t("清理临时文件夹", "Clean temp folder"));
         let _ = self.autostart.set_text(i18n::t("开机自启动", "Launch at login"));
@@ -303,6 +327,8 @@ fn config_set(
         if let Some(items) = state.menu_items.lock().unwrap().as_ref() {
             items.apply_lang();
         }
+        // 资源管理器里的「文件粉碎」跟着切换中英文
+        shred::ensure_shell_menu();
         for label in ["main", "settings"] {
             if let Some(w) = app.get_webview_window(label) {
                 let _ = w.emit("config-changed", serde_json::json!({ "lang": cfg.lang }));
@@ -343,14 +369,51 @@ async fn config_pick_temp_dir(
 }
 
 // ============== 窗口命令 ==============
-#[tauri::command]
-fn window_resize(window: tauri::WebviewWindow, w: f64, h: f64) {
-    let scale = window.scale_factor().unwrap_or(1.0);
+/// 推断「1 CSS 像素 = 多少物理像素」。
+///
+/// 前端每次都会带上当前 innerWidth，拿它和窗口物理宽度反推真实比例，
+/// 比 window.scale_factor() 可靠：后者在 DPI 虚拟化 / 页面缩放场景下
+/// 会报告 1.0，而 WebView2 实际按 1.25 渲染，比例偏小就会把可见区域算窄。
+fn resolve_px_per_css(window: &tauri::WebviewWindow, css_w: Option<f64>) -> f64 {
+    let fallback = window.scale_factor().unwrap_or(1.0);
+    let css_w = match css_w {
+        Some(v) if v.is_finite() && v >= 1.0 => v,
+        _ => return fallback,
+    };
+    match window.outer_size() {
+        Ok(size) => {
+            let ratio = size.width as f64 / css_w;
+            if ratio.is_finite() && (0.5..=4.0).contains(&ratio) {
+                ratio
+            } else {
+                fallback
+            }
+        }
+        Err(_) => fallback,
+    }
+}
+
+/// 按 CSS 尺寸裁剪窗口可见区域（右下角对齐）。
+/// w / h 是 CSS 像素；css_w 是前端上报的实际 CSS 视口宽度，用于换算比例。
+fn apply_visible_region(window: &tauri::WebviewWindow, w: f64, h: f64, css_w: Option<f64>) {
+    let state = window.app_handle().state::<AppState>();
+    *state.last_region_req.lock().unwrap() = Some((w, h));
+    let ratio = resolve_px_per_css(window, css_w);
+
     if let (Ok(size), Ok(hwnd)) = (window.outer_size(), window.hwnd()) {
         let width = size.width as i32;
         let height = size.height as i32;
-        let visible_w = (w * scale).round() as i32;
-        let visible_h = (h * scale).round() as i32;
+        let need_w = (w * ratio).round() as i32;
+        let need_h = (h * ratio).round() as i32;
+        // 夹到窗口本身：窗口比内容小时只可能裁不会扩，这种情况说明窗口物理尺寸
+        // 没跟着渲染比例放大（见 window_fit），记一行日志方便现场排查。
+        let visible_w = need_w.clamp(0, width);
+        let visible_h = need_h.clamp(0, height);
+        if need_w > width || need_h > height {
+            diag(&format!(
+                "window_resize clamp: w={w} h={h} css_w={css_w:?} ratio={ratio:.3} outer={width}x{height} need={need_w}x{need_h}"
+            ));
+        }
         // 只改变窗口可见且可点击的区域。WebView2 的实际尺寸保持不变，
         // 球体的绘制表面不会因弹出/收起气泡而重新创建或闪白。
         let region = unsafe {
@@ -367,12 +430,82 @@ fn window_resize(window: tauri::WebviewWindow, w: f64, h: f64) {
             if result == 0 {
                 unsafe { let _ = DeleteObject(HGDIOBJ(region.0)); }
             } else {
-                let state = window.app_handle().state::<AppState>();
                 state.visible_width.store(visible_w, Ordering::SeqCst);
                 state.visible_height.store(visible_h, Ordering::SeqCst);
             }
         }
     }
+}
+
+#[tauri::command]
+fn window_resize(window: tauri::WebviewWindow, w: f64, h: f64, css_w: Option<f64>) {
+    apply_visible_region(&window, w, h, css_w);
+}
+
+/// 把窗口物理尺寸对齐到「设计 CSS 尺寸」。
+///
+/// tauri.conf.json 里主窗口是 420×620 逻辑像素：系统缩放 125% 时窗口应为
+/// 525×775 物理像素、CSS 视口仍是 420×620。但有的机器（DPI 虚拟化、兼容性
+/// 设置里的「替代高 DPI 缩放行为」、WebView2 页面缩放叠加）窗口物理尺寸没跟着
+/// 放大，而 WebView2 按真实渲染比例绘制，CSS 视口就被压到 300 出头 —— 固定宽度、
+/// 右侧贴边的气泡于是溢出左边界，被 body 的 overflow:hidden 裁掉。
+///
+/// 这里不猜比例，直接用实测的两个数做比例修正：
+///   目标物理宽 = 当前物理宽 × 设计CSS宽 ÷ 当前CSS宽
+/// 当前 CSS 宽由前端 innerWidth 传入。不用 devicePixelRatio：它可能只反映系统
+/// 缩放（125%），而实际渲染比例还叠加了页面缩放，拿它换算会越改越偏。
+#[tauri::command]
+fn window_fit(
+    window: tauri::WebviewWindow,
+    w: f64,
+    h: f64,
+    css_w: f64,
+    css_h: f64,
+) -> Result<serde_json::Value, String> {
+    if !(css_w.is_finite() && css_w >= 100.0 && css_w <= 2000.0)
+        || !(css_h.is_finite() && css_h >= 100.0 && css_h <= 2000.0)
+    {
+        return Err(format!("意外的 CSS 视口尺寸：{css_w}×{css_h}"));
+    }
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let cur_w = size.width as f64;
+    let cur_h = size.height as f64;
+    // 比例修正，单步即可收敛；上限 2 倍防止比例异常时把窗口撑爆
+    let target_w = (cur_w * w / css_w).round().min(cur_w * 2.0).max(200.0) as u32;
+    let target_h = (cur_h * h / css_h).round().min(cur_h * 2.0).max(200.0) as u32;
+    if (cur_w - target_w as f64).abs() > 1.0 || (cur_h - target_h as f64).abs() > 1.0 {
+        // 保持右下角不动：窗口向左上扩展，悬浮球在屏幕上的位置不发生偏移。
+        let pos = window.outer_position().ok();
+        window
+            .set_size(tauri::PhysicalSize::new(target_w, target_h))
+            .map_err(|e| e.to_string())?;
+        if let Some(p) = pos {
+            let _ = window.set_position(tauri::PhysicalPosition::new(
+                p.x + cur_w as i32 - target_w as i32,
+                p.y + cur_h as i32 - target_h as i32,
+            ));
+        }
+        diag(&format!(
+            "window_fit: 物理 {cur_w}x{cur_h} -> {target_w}x{target_h} (css {css_w}x{css_h}, 设计 {w}x{h})"
+        ));
+    }
+    // 窗口尺寸变了，之前按旧窗口算的可见/可点击区域要立刻按新尺寸重算。
+    // 比例用「新物理宽 ÷ 设计 CSS 宽」推算：校正成功后二者就是一一对应关系。
+    let last = *window
+        .app_handle()
+        .state::<AppState>()
+        .last_region_req
+        .lock()
+        .unwrap();
+    if let Some((rw, rh)) = last {
+        apply_visible_region(&window, rw, rh, Some(w));
+    }
+    let now = window.outer_size().map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "width": now.width,
+        "height": now.height,
+        "ratio": resolve_px_per_css(&window, Some(w)),
+    }))
 }
 
 #[tauri::command]
@@ -414,6 +547,9 @@ fn open_context_menu(window: tauri::WebviewWindow) {
     let cfg = app.state::<AppState>().config.lock().unwrap().clone();
     if let Ok((menu, _)) = build_menu(app, &cfg) {
         let _ = window.popup_menu(&menu);
+        // 原生菜单关闭后重置小球 hover，避免 WebView2 把菜单打开时的
+        // :hover 状态保留下来，导致右上角关闭按钮一直显示。
+        let _ = window.emit("ball-hover-clear", ());
     }
 }
 
@@ -427,7 +563,7 @@ fn notify_blur() {}
 //
 // 标题栏颜色：默认跟随 Windows 系统强调色（本项目可能是青色系），
 // 这里用 DWM 属性强制覆盖为中性米白背景 + 深灰文字，与设置页配色一致。
-fn set_neutral_titlebar(hwnd: isize) {
+pub(crate) fn set_neutral_titlebar(hwnd: isize) {
     unsafe {
         // COLORREF 格式 0x00BBGGRR
         // 背景 #F7F6FA（页面底色）→ B=FA G=F6 R=F7
@@ -506,6 +642,33 @@ fn close_settings(app: AppHandle) {
 // 不再单独建窗口：拖进来的文件只入队，然后让悬浮球弹出对话气泡，
 // 由气泡完成「转换 / 压缩 → 开始 → 进度 → 完成」整条交互。
 
+/// 判断拖入的单个路径是不是水印工具支持的图片。
+pub(crate) fn is_image_path(path: &str) -> bool {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    watermark::IMAGE_EXTS.contains(&ext.as_str())
+}
+
+/// 拖放接收器专用入口：图片交给水印气泡，走「打开气泡 + 带路径」的轻量通道。
+/// 与文档入口一样，必须等 OLE Drop 回调返回后再驱动前端，避免模态循环卡死。
+pub fn stage_and_open_watermark(app: &AppHandle, paths: Vec<String>) {
+    diag(&format!(
+        "drop staged {} 张图片，通知水印气泡",
+        paths.len()
+    ));
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        while crate::drop_target::drop_in_flight() && start.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        open_watermark_paths(&app_handle, Some(paths));
+    });
+}
+
 /// 拖放接收器专用入口：入队后通知悬浮球弹出文档气泡。
 ///
 /// 注意：这里**不建窗口**。早先在 `IDropTarget::Drop` 回调里建 WebView2 窗口会
@@ -562,9 +725,22 @@ fn open_face(app: &AppHandle) {
 
 /// 让悬浮球把「图片水印去除」气泡弹出来（菜单 / 左键复用同一个入口）。
 fn open_watermark(app: &AppHandle) {
+    open_watermark_paths(app, None);
+}
+
+/// 水印气泡统一入口；拖放图片时把路径一起带给前端，打开后直接载入。
+fn open_watermark_paths(app: &AppHandle, paths: Option<Vec<String>>) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
-        let _ = w.emit("wm-open", ());
+        let _ = w.emit("wm-open", serde_json::json!({ "paths": paths }));
+    }
+}
+
+/// 让悬浮球把「文件查找」气泡弹出来（菜单 / 左键复用同一个入口）。
+fn open_filesearch(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.emit("fs-open", ());
     }
 }
 
@@ -574,7 +750,16 @@ fn open_watermark(app: &AppHandle) {
 /// 打开过其中任意一项后，左键点悬浮主体会再次打开同一项。以后新增工具类菜单项，
 /// 只要把 id 加进这张表、并在 `run_tool_menu_item` 里补一条执行分支，左键行为就自动
 /// 生效，不需要再改点击逻辑。
-const TOOL_MENU_IDS: &[&str] = &["paste", "docs", "face", "watermark"];
+const TOOL_MENU_IDS: &[&str] = &[
+    "paste",
+    "docs",
+    "filefind",
+    "face",
+    "watermark",
+    "junk",
+    "large",
+    "cdrive",
+];
 
 fn is_tool_menu_item(id: &str) -> bool {
     TOOL_MENU_IDS.contains(&id)
@@ -591,12 +776,24 @@ fn run_tool_menu_item(app: &AppHandle, id: &str) -> bool {
             open_docs(app, None);
             true
         }
+        "filefind" => {
+            open_filesearch(app);
+            true
+        }
         "face" => {
             open_face(app);
             true
         }
         "watermark" => {
             open_watermark(app);
+            true
+        }
+        "junk" | "large" | "cdrive" => {
+            let app_owned = app.clone();
+            let tab = id.to_string();
+            let _ = tauri::async_runtime::spawn(async move {
+                let _ = cleanup::cleanup_open(app_owned, Some(tab)).await;
+            });
             true
         }
         _ => false,
@@ -632,15 +829,29 @@ fn build_menu(
     app: &AppHandle,
     cfg: &Config,
 ) -> tauri::Result<(Menu<tauri::Wry>, MenuHandles)> {
-    // 分区一：文档相关
+    // 分区一：文档与图片工具
     let paste = MenuItemBuilder::with_id("paste", i18n::t("文档复制", "Copy documents")).build(app)?;
     let docs = MenuItemBuilder::with_id("docs", i18n::t("文档工具", "Document tools")).build(app)?;
+    // 文件查找：紧跟「文档工具」，按名称模糊匹配本机磁盘 / 网络共享盘
+    let filesearch = MenuItemBuilder::with_id("filefind", i18n::t("文件查找", "File search")).build(app)?;
     let face = MenuItemBuilder::with_id("face", i18n::t("人脸比对", "Face matching")).build(app)?;
     let watermark = MenuItemBuilder::with_id(
         "watermark",
-        i18n::t("图片水印去除", "Remove watermark"),
+        i18n::t("水印去除", "Remove watermark"),
     )
     .build(app)?;
+    // 系统工具子菜单：磁盘清理三项
+    let junk = MenuItemBuilder::with_id("junk", i18n::t("垃圾清理", "Junk cleanup")).build(app)?;
+    let large =
+        MenuItemBuilder::with_id("large", i18n::t("大文件清理", "Large files")).build(app)?;
+    let cdrive =
+        MenuItemBuilder::with_id("cdrive", i18n::t("C 盘清理", "C: drive cleanup")).build(app)?;
+    let system = Submenu::with_items(
+        app,
+        i18n::t("系统工具", "System tools"),
+        true,
+        &[&junk, &large, &cdrive],
+    )?;
     // 分区二：临时文件夹与程序设置
     let open = MenuItemBuilder::with_id("open", i18n::t("打开临时文件夹", "Open temp folder")).build(app)?;
     let clean =
@@ -651,15 +862,21 @@ fn build_menu(
     let settings = MenuItemBuilder::with_id("settings", i18n::t("设置", "Settings")).build(app)?;
     let quit = MenuItemBuilder::with_id("quit", i18n::t("退出", "Quit")).build(app)?;
     let menu = MenuBuilder::new(app)
-        .items(&[&paste, &docs, &face, &watermark])
+        .items(&[&paste, &docs, &filesearch, &face, &watermark])
+        .item(&system)
         .separator()
         .items(&[&open, &clean, &autostart, &settings, &quit])
         .build()?;
     let handles = MenuHandles {
         paste,
         docs,
+        filesearch,
         face,
         watermark,
+        system,
+        junk,
+        large,
+        cdrive,
         open,
         clean,
         autostart,
@@ -794,6 +1011,71 @@ fn copy_file_to_clipboard(path: &std::path::Path) -> bool {
     }
 }
 
+#[derive(Serialize, Clone)]
+struct ClipboardPayload {
+    /// 文件路径列表。截图/图片会先落盘成临时 PNG，再作为文件路径返回。
+    files: Vec<String>,
+    /// files / image / empty，仅用于前端区分提示。
+    kind: String,
+}
+
+/// 读取剪贴板中的文件或图片。优先使用资源管理器复制出来的文件列表；
+/// 没有文件列表时再读图片并落成临时 PNG，避免三个工具各自维护一套图片解码逻辑。
+fn clipboard_read_blocking() -> Result<ClipboardPayload, String> {
+    let ctx = ClipboardContext::new().map_err(|e| format!("打开剪贴板失败: {}", e))?;
+
+    if let Ok(files) = ctx.get_files() {
+        let existing: Vec<String> = files
+            .into_iter()
+            .filter(|p| std::path::Path::new(p).is_file())
+            .collect();
+        if !existing.is_empty() {
+            return Ok(ClipboardPayload {
+                files: existing,
+                kind: "files".to_string(),
+            });
+        }
+    }
+
+    let img = match ctx.get_image() {
+        Ok(img) => img,
+        Err(_) => {
+            return Ok(ClipboardPayload {
+                files: Vec::new(),
+                kind: "empty".to_string(),
+            });
+        }
+    };
+    let dir = std::env::temp_dir().join("desktop-pet-tool-paste");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let mut path = dir.join(format!("paste-{}.png", stamp));
+    let mut seq = 1;
+    while path.exists() {
+        path = dir.join(format!("paste-{}-{}.png", stamp, seq));
+        seq += 1;
+    }
+    let path_str = path.to_string_lossy().into_owned();
+    img.save_to_path(&path_str)
+        .map_err(|e| format!("保存剪贴板图片失败: {}", e))?;
+
+    Ok(ClipboardPayload {
+        files: vec![path_str],
+        kind: "image".to_string(),
+    })
+}
+
+/// 气泡内 Ctrl+V：读取剪贴板文件/图片，由前端按当前打开的工具分流。
+#[tauri::command]
+async fn clipboard_read() -> Result<ClipboardPayload, String> {
+    tauri::async_runtime::spawn_blocking(clipboard_read_blocking)
+        .await
+        .map_err(|e| format!("读取剪贴板任务失败: {}", e))?
+}
+
 #[tauri::command]
 async fn download_start(
     app: AppHandle,
@@ -861,6 +1143,24 @@ async fn download_start(
 // ============== 入口 ==============
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 单实例：资源管理器右键「文件粉碎」在多选时会对每个选中项各拉起一次进程，
+    // 后启动的实例只把路径转交给已在运行的主实例，然后自己退出，避免桌面堆出多个悬浮球。
+    // --fetch-pdf-deps（安装期预下载）与 --elevated（以管理员重启）必须是独立进程。
+    let args: Vec<String> = std::env::args().collect();
+    let standalone = args
+        .iter()
+        .any(|a| a == "--fetch-pdf-deps" || a == "--elevated");
+    if !standalone && !single::claim_primary() {
+        let paths = shred::paths_from_args();
+        if paths.is_empty() {
+            // 没有粉碎路径：多半是用户又点了一次图标，让已在运行的实例把球叫到前台
+            single::forward_activate();
+        } else {
+            single::forward_shred(&paths);
+        }
+        std::process::exit(0);
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -872,6 +1172,7 @@ pub fn run() {
             dragging: AtomicBool::new(false),
             visible_width: AtomicI32::new(112),
             visible_height: AtomicI32::new(112),
+            last_region_req: Mutex::new(None),
             drag_origin: Mutex::new(None),
             menu: Mutex::new(None),
             menu_items: Mutex::new(None),
@@ -880,6 +1181,9 @@ pub fn run() {
         .manage(docs::DocsState::default())
         .manage(face::FaceState::default())
         .manage(watermark::WatermarkState::default())
+        .manage(cleanup::CleanupState::default())
+        .manage(filesearch::SearchState::default())
+        .manage(shred::ShredState::default())
         .setup(|app| {
             // 安装期预下载：NSIS 钩子以 --fetch-pdf-deps 拉起本程序，只拉取外置依赖后退出，
             // 不建窗口/托盘。退出码 0 = 就绪；非 0 = 失败，安装器跳过、首启再补下载。
@@ -906,6 +1210,18 @@ pub fn run() {
                 let _ = app.autolaunch().enable();
             }
 
+            // 文件粉碎：注册资源管理器右键菜单（每次启动都对一遍 exe 路径与文案），
+            // 同时启动命名管道服务，接住其它实例转交过来的粉碎请求。
+            shred::ensure_shell_menu();
+            single::start_server(app.handle().clone());
+            // 本次是被右键菜单 / 其它实例直接以 --shred 拉起的：先把路径入队，
+            // 前端脚本加载完会主动来取（见 renderer.js 启动段）。
+            let initial_shred = shred::paths_from_args();
+            if !initial_shred.is_empty() {
+                let state = app.state::<shred::ShredState>();
+                *state.pending.lock().unwrap() = initial_shred;
+            }
+
             let (menu, menu_items) = build_menu(app.handle(), &cfg)?;
             {
                 let state = app.state::<AppState>();
@@ -917,7 +1233,7 @@ pub fn run() {
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")).ok();
             let tray = TrayIconBuilder::new()
                 .icon(tray_icon.unwrap())
-                .tooltip("desktop-pet-tool")
+                .tooltip("dpt")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_tray_icon_event(|tray, event| {
@@ -957,7 +1273,9 @@ pub fn run() {
                 sw - margin_r - win_w,
                 sh - margin_b - win_h,
             ));
-            window_resize(main.clone(), 112.0, 112.0);
+            // 初始按 devicePixelRatio 未知的保守值裁剪；页面加载后前端会调用
+            // window_fit 校正窗口物理尺寸，并按上报的 innerWidth 重算这里。
+            apply_visible_region(&main, 112.0, 112.0, None);
             let _ = main.show();
             // 窗口显示之后再接管拖放：此时 WebView2 的子窗口都已建出，
             // 能把主窗口和它们的 IDropTarget 一起换成自己的实现（原因见 drop_target.rs 顶部注释）。
@@ -981,6 +1299,7 @@ pub fn run() {
             config_set,
             config_pick_temp_dir,
             window_resize,
+            window_fit,
             drag_start,
             drag_end,
             request_close,
@@ -989,6 +1308,7 @@ pub fn run() {
             notify_blur,
             open_settings_command,
             close_settings,
+            clipboard_read,
             docs::docs_pick_files,
             docs::docs_stage,
             docs::docs_take_pending,
@@ -1008,7 +1328,39 @@ pub fn run() {
             watermark::wm_status,
             watermark::wm_start,
             watermark::wm_cancel,
-            watermark::wm_open_outdir
+            watermark::wm_open_outdir,
+            filesearch::fs_targets,
+            filesearch::fs_pick_folder,
+            filesearch::fs_search,
+            filesearch::fs_cancel,
+            filesearch::fs_reveal,
+            filesearch::fs_open,
+            cleanup::cleanup_open,
+            cleanup::cleanup_tab_get,
+            cleanup::cleanup_cancel,
+            cleanup::cleanup_disks,
+            cleanup::cleanup_admin,
+            cleanup::cleanup_reveal,
+            cleanup::cleanup_elevate,
+            cleanup::cleanup_state_clear,
+            cleanup::junk_scan,
+            cleanup::junk_clean,
+            cleanup::large_scan,
+            cleanup::large_delete,
+            cleanup::cdrive_analyze,
+            cleanup::cdrive_system,
+            cleanup::cdrive_component_size,
+            cleanup::cdrive_action,
+            cleanup::cache_scan,
+            cleanup::cache_clean,
+            cleanup::apps_list,
+            cleanup::apps_sizes,
+            cleanup::apps_migrate,
+            cleanup::apps_uninstall,
+            shred::shred_take_pending,
+            shred::shred_inspect,
+            shred::shred_start,
+            shred::shred_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

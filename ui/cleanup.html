@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>磁盘清理</title>
+  <link rel="stylesheet" href="cleanup.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-title" data-i18n="disk.title">磁盘清理</span>
+      <span id="adminBadge" class="badge" data-i18n="disk.admin.user">普通权限</span>
+    </div>
+    <div class="top-actions">
+      <span id="topHint" class="top-hint"></span>
+      <button id="elevateBtn" class="btn ghost hidden" data-i18n="disk.elevate">以管理员重启</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="junk" data-i18n="disk.tab.junk">垃圾清理</button>
+    <button class="tab" data-tab="large" data-i18n="disk.tab.large">大文件</button>
+    <button class="tab" data-tab="cdrive" data-i18n="disk.tab.cdrive">C 盘专清</button>
+  </nav>
+
+  <main class="content">
+    <!-- 垃圾清理 -->
+    <section id="panelJunk" class="panel">
+      <div class="toolbar">
+        <div id="junkDisks" class="disk-strip"></div>
+        <div class="toolbar-actions">
+          <button id="junkCancel" class="btn ghost hidden" data-i18n="disk.cancel">取消扫描</button>
+          <button id="junkScan" class="btn primary" data-i18n="disk.junk.scan">扫描垃圾</button>
+        </div>
+      </div>
+      <div class="progress-line">
+        <div class="bar"><i id="junkBar"></i></div>
+        <span id="junkMeta" class="meta"></span>
+      </div>
+      <div id="junkNotice" class="notice hidden"></div>
+
+      <div class="list-head">
+        <span data-i18n="disk.junk.category">清理项</span>
+        <span data-i18n="disk.junk.size">可释放</span>
+      </div>
+      <div id="junkList" class="scroll list">
+        <div class="empty" data-i18n="disk.emptyHint">点「扫描垃圾」开始检查，扫描只读，不会改动任何文件。</div>
+      </div>
+
+      <footer class="footer">
+        <label class="check"><input type="checkbox" id="junkAll"><span data-i18n="disk.junk.all">全选</span></label>
+        <span id="junkSummary" class="summary">—</span>
+        <button id="junkClean" class="btn danger" disabled data-i18n="disk.cleanSelected">清理选中</button>
+      </footer>
+    </section>
+
+    <!-- 大文件 -->
+    <section id="panelLarge" class="panel hidden">
+      <div class="toolbar">
+        <div id="largeDisks" class="disk-strip"></div>
+        <div class="toolbar-actions">
+          <label class="select-wrap">
+            <span data-i18n="disk.large.min">最小体积</span>
+            <select id="largeMin">
+              <option value="100">100 MB</option>
+              <option value="300">300 MB</option>
+              <option value="500" selected>500 MB</option>
+              <option value="1024">1 GB</option>
+            </select>
+          </label>
+          <button id="largeCancel" class="btn ghost hidden" data-i18n="disk.cancel">取消扫描</button>
+          <button id="largeScan" class="btn primary" data-i18n="disk.large.scan">扫描大文件</button>
+        </div>
+      </div>
+      <div class="progress-line">
+        <div class="bar"><i id="largeBar"></i></div>
+        <span id="largeMeta" class="meta"></span>
+      </div>
+      <div class="notice" data-i18n="disk.large.hint">已跳过 C:\Windows 等系统目录；删除不可恢复，请逐项确认。</div>
+
+      <div class="table-head">
+        <label class="check"><input type="checkbox" id="largeAll"></label>
+        <span class="col-name" data-i18n="disk.large.name">文件</span>
+        <span class="col-size" data-i18n="disk.large.size">大小</span>
+        <span class="col-time" data-i18n="disk.large.time">修改时间</span>
+        <span class="col-op" data-i18n="disk.large.actions">操作</span>
+      </div>
+      <div id="largeList" class="scroll list table">
+        <div class="empty" data-i18n="disk.large.emptyHint">扫描后会列出超过阈值的大文件。</div>
+      </div>
+
+      <footer class="footer">
+        <span id="largeSummary" class="summary">—</span>
+        <button id="largeDelete" class="btn danger" disabled data-i18n="disk.large.delete">删除选中</button>
+      </footer>
+    </section>
+
+    <!-- C 盘专清 -->
+    <section id="panelC" class="panel hidden">
+      <div class="c-scroll">
+        <div class="card">
+          <div class="card-head">
+            <span data-i18n="disk.c.overview">C 盘概况</span>
+            <span id="cFree" class="meta"></span>
+            <span class="spacer"></span>
+            <button id="cAnalyze" class="btn ghost" data-i18n="disk.c.analyze">分析空间占用</button>
+            <button id="cCancel" class="btn ghost hidden" data-i18n="disk.cancel">取消扫描</button>
+          </div>
+          <div class="bar big"><i id="cBar"></i></div>
+          <div class="progress-line">
+            <span id="cMeta" class="meta"></span>
+          </div>
+          <div id="cGroupsWrap" class="groups-wrap hidden">
+            <div class="crumbs">
+              <button id="cUp" class="link hidden" data-i18n="disk.c.up">← 上一级</button>
+              <span id="cPath" class="crumb-path"></span>
+              <span class="meta" data-i18n="disk.c.drill">点目录继续下钻</span>
+            </div>
+            <div id="cGroups" class="scroll groups"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span data-i18n="disk.c.system">系统级清理</span>
+            <span id="cReclaim" class="meta"></span>
+            <span class="spacer"></span>
+            <button id="cSystemScan" class="btn ghost" data-i18n="disk.c.systemScan">重新统计</button>
+          </div>
+          <div id="cSystem" class="sys-grid">
+            <div class="empty" data-i18n="disk.c.systemHint">统计休眠文件、旧系统备份、回收站等系统级占用。</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span data-i18n="disk.cache.title">软件缓存数据清理</span>
+            <span id="cCacheMeta" class="meta"></span>
+            <span class="spacer"></span>
+            <button id="cCacheScan" class="btn ghost" data-i18n="disk.cache.scan">扫描软件缓存</button>
+          </div>
+          <div class="notice" data-i18n="disk.cache.hint">只清理缓存、日志和临时文件；聊天图片 / 视频 / 文件与草稿备份属于历史内容，已单独标为高风险，默认不勾选。建议先退出对应软件，占用中的文件会跳过。</div>
+          <div id="cCacheList" class="scroll cache-list">
+            <div class="empty" data-i18n="disk.cache.emptyHint">扫描后按应用列出所有缓存，每项可选择 7 天前、30 天前、90 天前、半年前、更早的数据。</div>
+          </div>
+          <footer class="footer">
+            <span id="cCacheSummary" class="summary">—</span>
+            <button id="cCacheClean" class="btn danger" disabled data-i18n="disk.cache.clean">清理选中</button>
+          </footer>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span data-i18n="disk.c.apps">C 盘应用</span>
+            <span id="cAppsMeta" class="meta"></span>
+            <span class="spacer"></span>
+            <label class="select-wrap">
+              <span data-i18n="disk.c.migrateTo">迁移到</span>
+              <select id="cTargetDrive"></select>
+            </label>
+            <button id="cAppsScan" class="btn ghost" data-i18n="disk.c.appScan">扫描应用列表</button>
+          </div>
+          <div class="notice" data-i18n="disk.c.appsHint">迁移会移动目录并建立目录联接，应用仍从原路径启动；卸载会启动应用自带卸载程序，并清理安装目录残留。执行前请先退出该应用。</div>
+          <div id="cApps" class="scroll apps">
+            <div class="empty" data-i18n="disk.c.appEmpty">还没有扫描应用列表。</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-box">
+      <h3 id="modalTitle"></h3>
+      <div id="modalBody" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="modalCancel" class="btn ghost" data-i18n="disk.cancelBtn">取消</button>
+        <button id="modalOk" class="btn danger" data-i18n="disk.ok">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="i18n.js"></script>
+  <script src="cleanup.js"></script>
+</body>
+</html>

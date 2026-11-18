@@ -3,17 +3,20 @@
 // 选型结论：效果优先，采用 LaMa 修复模型（ONNX，约 88MB）。模型只在 Python 侧
 // 通过 onnxruntime 加载，主进程不常驻推理。
 //
-// 下发沿用「依赖外置」那条已跑通的链路：腾讯云 COS 公开直链 + manifest 里的
-// sha256 白名单 + LocalAppData 缓存 + marker。首次使用时才下载，不放进安装包。
+// 下发沿用「依赖外置」那条已跑通的链路：腾讯云 COS 公开直链 + 本地内置 manifest
+// + 安装目录 data 缓存 + marker。首次使用时才下载模型，不放进安装包。
 //
-// 缓存布局（LocalAppData 下，随 bundleid 目录在卸载时清理）：
+// manifest.json 只有 1KB，随 exe 编译（见 MANIFEST_JSON），不再单独上传 COS；
+// COS 上只保留大模型 inpainting_lama.onnx。
+//
+// 缓存布局（应用安装目录/data 下，例如 D:\tools\dpt\data）：
 //   watermark/<TAG>/models/inpainting_lama.onnx
 //   watermark/<TAG>/deps/onnxruntime/...   onnxruntime 叠加目录（按需回退下载）
 //   watermark/<TAG>/marker.json
 //
 // onnxruntime 与「人脸比对」是同一份运行时：优先复用 face/<TAG>/deps，避免重复下载；
 // 仅当人脸那套依赖不在本地时，才把同一份 ort 包解压到本模块自己的 deps 目录。
-//
+
 // 也支持「手工放置」：把 onnx 拷进 models 目录后直接可用，不再走网络。
 
 use std::path::{Path, PathBuf};
@@ -21,7 +24,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// 模型目录标签：换模型 / 换运行时就换新标签，旧缓存不混用。
 const TAG: &str = "v1";
@@ -30,6 +33,10 @@ const BASE_URL: &str =
     "https://prina-1413661498.cos.ap-shanghai.myqcloud.com/tools/desktop-pet-tool/watermark-models/pack";
 
 const MODEL_NAME: &str = "inpainting_lama.onnx";
+
+/// 模型清单内置在 exe 里，不再向 COS 请求 manifest.json。
+/// 换模型时改这个文件并重新编译，COS 只需要上传新的 onnx。
+const MANIFEST_JSON: &str = include_str!("../../../deploy/watermark-models/manifest.json");
 
 /// onnxruntime 包与「人脸比对」共用同一份压缩包，常量记录其清单，供回退下载时校验。
 const DEPS_ZIP: &str = "face-deps-v1.zip";
@@ -67,9 +74,7 @@ pub struct Models {
 }
 
 fn cache_root(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_local_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
+    crate::paths::install_data_root(app)
         .join("watermark")
         .join(TAG)
 }
@@ -84,9 +89,7 @@ fn deps_dir(app: &AppHandle) -> PathBuf {
 
 /// 人脸模块的 ort 依赖目录：优先复用，不重复下载。
 fn face_deps_dir(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_local_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
+    crate::paths::install_data_root(app)
         .join("face")
         .join("v1")
         .join("deps")
@@ -128,27 +131,9 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-async fn fetch_manifest() -> Result<Manifest, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 desktop-pet-tool/1.0")
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("初始化下载失败: {}", e))?;
-    let url = format!("{}/manifest.json", BASE_URL);
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("拉取模型清单失败: {}", e))?;
-    if !resp.status().is_success() {
-        return Err(format!("拉取模型清单失败，HTTP {}", resp.status().as_u16()));
-    }
-    // reqwest 未启用 json 特性，这里手动解析，避免为一个清单多拉一个 feature
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("读取模型清单失败: {}", e))?;
-    serde_json::from_str::<Manifest>(&text).map_err(|e| format!("模型清单格式错误: {}", e))
+fn local_manifest() -> Result<Manifest, String> {
+    serde_json::from_str::<Manifest>(MANIFEST_JSON)
+        .map_err(|e| format!("内置模型清单格式错误: {}", e))
 }
 
 /// 流式下载并按已收字节回报进度（0.0–1.0 的本文件进度）。
@@ -235,27 +220,9 @@ pub fn ensure(app: &AppHandle, on_progress: &dyn Fn(f32, &str)) -> Result<Models
     let root = cache_root(app);
     std::fs::create_dir_all(models_dir(app)).map_err(|e| format!("创建缓存目录失败: {}", e))?;
 
-    // 2. 取清单
+    // 2. 读取内置清单（不再请求 COS manifest）
     on_progress(0.0, "检查模型");
-    let manifest = match tauri::async_runtime::block_on(fetch_manifest()) {
-        Ok(m) => m,
-        Err(e) => {
-            // 模型已在本地、只缺 ort 时给出明确指引
-            if is_model_ok(&model) {
-                return Err(format!(
-                    "{}；模型文件已在本地，但 onnxruntime 依赖缺失，请联网重试，或把依赖包解压到 {}",
-                    e,
-                    deps_dir(app).display()
-                ));
-            }
-            return Err(format!(
-                "{}。首次使用需要联网下载约 88MB 修复模型；也可以手动把 {} 放进 {} 后重试。",
-                e,
-                MODEL_NAME,
-                models_dir(app).display()
-            ));
-        }
-    };
+    let manifest = local_manifest()?;
 
     // 3. 修复模型：缺失则下载并校验
     if !is_model_ok(&model) {
